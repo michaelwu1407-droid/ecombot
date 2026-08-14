@@ -1,4 +1,6 @@
+import { after } from 'next/server';
 import { getMessagingProvider } from '@/lib/messaging';
+import { runShopperTurn } from '@/lib/agent/run';
 import { claimEvent, ingestInboundEvent, releaseEvent } from '@/lib/inbound';
 import { logEvent } from '@/lib/log';
 
@@ -59,8 +61,23 @@ export async function POST(req: Request): Promise<Response> {
     const ingested = await ingestInboundEvent(event);
     if (!ingested) return Response.json({ ok: true, unmapped: true });
 
-    // Stage 3 runs the agent turn here, inside `after()`. Until then the row is
-    // the deliverable: a DM to the test account appears in `messages`.
+    after(async () => {
+      try {
+        await runShopperTurn({
+          merchantId: ingested.merchantId,
+          conversationId: ingested.conversationId,
+          customerId: ingested.customerId,
+        });
+      } catch (agentError) {
+        // The message is already saved, so nothing is lost — the merchant sees the
+        // conversation, and the health view sees why the agent did not answer.
+        console.error('[webhook] agent turn failed', agentError);
+        await logEvent(ingested.merchantId, 'agent.turn_failed', {
+          conversationId: ingested.conversationId,
+          message: agentError instanceof Error ? agentError.message : String(agentError),
+        });
+      }
+    });
 
     return Response.json({ ok: true });
   } catch (error) {

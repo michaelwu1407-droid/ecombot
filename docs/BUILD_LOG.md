@@ -196,6 +196,66 @@ against the documented GraphQL Admin API, and the pure logic — money conversio
 domain normalisation, retry classification — is tested. Stock parity with a real
 admin is outstanding until a store is connected.
 
+---
+
+## Stage 3 — Shopper agent
+
+**Done when:** "do you have the linen dress in a 10?" returns an accurate reply
+grounded in real stock.
+
+### Shipped
+
+- All eight tools, each scoped to the calling merchant and returning structured
+  data rather than prose.
+- The loop (`lib/agent/run.ts`), max 6 iterations, no framework — plain tool calling
+  in our own code, per §3.1.
+- The base prompt, carrying every rule §4.4 requires, with the prompt-injection rule
+  placed last so it sits closest to the untrusted content.
+- `lib/agent/deliver.ts` as the single exit point for anything said to a customer.
+- Wired: webhook → ingest → agent → reply.
+- 19 more tests (54 total): prompt construction and the model client.
+
+### Decisions
+
+- **Tool arguments that name a customer are ignored.** `get_customer_history` and
+  `add_to_waitlist` take a `customerId` in the spec's signature. The model is steered
+  by public, untrusted input, so the argument is accepted and then discarded in
+  favour of the conversation's own customer. Otherwise a shopper who talks the model
+  into passing a different id reads someone else's purchase history.
+- **A turn deadline, not just a per-call timeout.** A tool-using turn is at least two
+  model round trips, so a per-call timeout cannot hold a total budget. At 5 seconds
+  the agent drops its tools and makes one final text-only call: "slow" becomes
+  "slightly less researched" rather than silence. Guardrails still apply.
+- **Suggest mode carries stage 3 on its own.** Guardrails land in stage 4, and until
+  they do nothing auto-sends — `auto_send` defaults to false, which is the spec's own
+  default anyway (§3.4). There is no window in which unguarded text can reach a
+  shopper.
+- **Queued and blocked drafts are excluded from history.** A draft the shopper never
+  saw would otherwise have the agent refer back to something absent from their inbox.
+
+### Review pass — problems found and fixed
+
+- **An unusable search query returned five arbitrary products.** If every word was a
+  single character, the filter was dropped and the query returned whatever came
+  first — so the agent could quote a real price for a product nobody asked about.
+  Now returns nothing.
+- **Search terms are stripped, not just comma-escaped.** They come from a shopper's
+  message: `%` and `_` are ilike wildcards and parens are PostgREST filter syntax.
+- **Response time would never have been recorded for a new merchant.** It was
+  recorded only when the agent itself sent, but every new merchant is in suggest
+  mode, where the agent never sends directly. Moved into the delivery path and
+  measured from the first inbound message, so a merchant-approved send records it
+  too — which is also the honest number, since the shopper was not answered until
+  approval.
+
+### Open, for §4.10
+
+- **Latency is unmeasured.** The turn is instrumented end to end (`agent.turn_completed`
+  carries `latencyMs`), but without an OpenRouter key there is no real number yet.
+  The structural question is whether two model round trips fit in five seconds on the
+  pinned model. If they do not, the deadline logic degrades gracefully rather than
+  failing, but the honest answer needs a measurement.
+
 ### Next
 
-Stage 3 — the shopper agent: tools, the loop, and the base prompt.
+Stage 4 — the eight guardrails, escalation queue, and memory extraction.

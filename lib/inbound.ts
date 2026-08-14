@@ -24,8 +24,6 @@ export interface IngestResult {
   messageId: string;
   /** True when this event opened the conversation, not continued one. */
   isNewConversation: boolean;
-  /** Set when the merchant has never been replied to on this thread. */
-  awaitingFirstResponseSince: Date | null;
 }
 
 /** Provider delivery is at-least-once. Returns false when we have seen this id. */
@@ -86,7 +84,7 @@ export async function ingestInboundEvent(event: InboundEvent): Promise<IngestRes
   }
 
   const customerId = await upsertCustomer(merchantId, event);
-  const { conversationId, isNewConversation, awaitingFirstResponseSince } = await resolveConversation(
+  const { conversationId, isNewConversation } = await resolveConversation(
     merchantId,
     customerId,
     event
@@ -125,7 +123,6 @@ export async function ingestInboundEvent(event: InboundEvent): Promise<IngestRes
     conversationId,
     messageId: message.id,
     isNewConversation,
-    awaitingFirstResponseSince,
   };
 }
 
@@ -156,7 +153,7 @@ async function resolveConversation(
   merchantId: string,
   customerId: string,
   event: InboundEvent
-): Promise<{ conversationId: string; isNewConversation: boolean; awaitingFirstResponseSince: Date | null }> {
+): Promise<{ conversationId: string; isNewConversation: boolean }> {
   const db = supabaseAdmin();
 
   // A shopper who comments and then DMs within the hour is one person having one
@@ -171,7 +168,7 @@ async function resolveConversation(
 
   const { data: existing } = await db
     .from('conversations')
-    .select('id, status, first_response_seconds, created_at')
+    .select('id, status')
     .eq('merchant_id', merchantId)
     .eq('customer_id', customerId)
     .in('status', ['active', 'stalled', 'escalated'])
@@ -185,12 +182,7 @@ async function resolveConversation(
     if (existing.status === 'stalled') {
       await db.from('conversations').update({ status: 'active' }).eq('id', existing.id);
     }
-    return {
-      conversationId: existing.id,
-      isNewConversation: false,
-      awaitingFirstResponseSince:
-        existing.first_response_seconds === null ? new Date(existing.created_at) : null,
-    };
+    return { conversationId: existing.id, isNewConversation: false };
   }
 
   const { data, error } = await db
@@ -205,16 +197,10 @@ async function resolveConversation(
       last_message_at: event.timestamp.toISOString(),
       last_inbound_at: event.timestamp.toISOString(),
     })
-    .select('id, created_at')
+    .select('id')
     .single();
 
   if (error) throw error;
 
-  return {
-    conversationId: data.id,
-    isNewConversation: true,
-    // Response time is the headline metric (§2.7), measured from the moment the
-    // customer wrote — not from when our infrastructure got around to it.
-    awaitingFirstResponseSince: event.timestamp,
-  };
+  return { conversationId: data.id, isNewConversation: true };
 }
