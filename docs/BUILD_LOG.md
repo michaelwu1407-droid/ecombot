@@ -52,10 +52,38 @@ consequence is the one risk §1.7 names as fatal: a restricted merchant account.
 anything in the 24h-7d band into the merchant's approval queue rather than sending it
 unattended, so the tag is used for a message a human actually approved.
 
-**Needs a founder decision** (raised now, not blocking): the honest options are to
-narrow revival to under 24 hours and accept that restock notices need merchant
-approval, or to raise messaging-window scope with Meta at app review. Worth deciding
-before pitching restock notification as automatic.
+**Decided:** merchant one-tap approval for anything in the 24h-7d band. Verified
+against Meta's own developer documentation before committing to it.
+
+### Follow-up verification: is there a workaround?
+
+Checked properly rather than assumed. Three mechanisms exist; only one is available
+to us today.
+
+| Mechanism | Status | Usable now? |
+|---|---|---|
+| Standard 24h window | Current | Yes — covers all reactive replies |
+| `HUMAN_AGENT` tag, 24h → 7d | Current, but Meta scopes it to messages a human is handling | Only behind merchant approval |
+| Marketing Messages API — topic opt-in inside the window, then send outside it | Replaced the Recurring Notifications API on 10 Feb 2026 | **No — the bridge provider does not expose it** |
+
+The third one matters and is worth revisiting. Its shape is an exact fit for the
+waitlist: ask the shopper inside the open window whether they want to be told when
+the item is back, and their opt-in licenses sending outside the window on that topic
+on an ongoing basis. That is precisely §2.4's waitlist and §2.5's restock
+notification, done the way Meta wants it done — no tag stretching, no policy risk.
+
+The bridge provider has no opt-in or marketing-message surface for Instagram (their
+opt-in tooling is SMS and WhatsApp only). So it is not reachable today. It becomes
+reachable either when they add it or when we migrate to Meta direct.
+
+Limits to design against when it does: one marketing message per subscriber per
+48 hours, one message per opt-in, at most one opt-in request per user per week per
+topic, and the message must match the topic opted into. A restock notification fits
+inside all four.
+
+**Implication for the roadmap:** restock notification is merchant-approved now and
+becomes fully automatic later, without a product redesign. Worth raising with the
+bridge provider — it may be a feature request rather than a migration.
 
 ---
 
@@ -130,6 +158,44 @@ All additive; nothing specced was dropped.
   that earned it — the exact link §4.9 asks the merchant to follow. Reuse is now capped
   at 24 hours.
 
+---
+
+## Stage 2 — Commerce
+
+**Done when:** the catalogue is queryable and stock matches the Shopify admin.
+
+### Shipped
+
+- Shopify Admin GraphQL client over plain fetch — no SDK, per §4.1. Handles the
+  cost-based throttling with backoff, and distinguishes a dead token (fail, tell the
+  merchant) from a transient error (retry).
+- Catalogue sync into `products`, paginated across products and variants, storing
+  integer cents throughout.
+- Hourly cron at `/api/cron/product-sync`, authenticated with a bearer secret because
+  cron paths are public URLs.
+- Connect screen: the merchant pastes a custom app token, it is verified against the
+  live API before being stored, encrypted, and the first sync runs immediately rather
+  than leaving them to wait an hour.
+- 8 more tests (35 total): money conversion and shop-domain normalisation.
+
+### Decisions
+
+- **Custom app token, not a public Shopify OAuth app.** Merchants are onboarded
+  personally by the founder (§1.1), so a public app would mean sitting in a second
+  review queue for no gain.
+- **Trust `availableForSale` over the raw inventory count.** A merchant who oversells
+  deliberately shows available at zero stock; second-guessing that would make the
+  agent refuse real sales.
+- **Vanished variants are marked unavailable, not deleted.** Waitlist entries and past
+  conversations keep their references, so history stays intact.
+
+### Verification status
+
+Same as stage 1: no live Shopify store in this environment. The client is written
+against the documented GraphQL Admin API, and the pure logic — money conversion,
+domain normalisation, retry classification — is tested. Stock parity with a real
+admin is outstanding until a store is connected.
+
 ### Next
 
-Stage 2 — Shopify connection and product sync.
+Stage 3 — the shopper agent: tools, the loop, and the base prompt.

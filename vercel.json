@@ -1,0 +1,10 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "crons": [
+    { "path": "/api/cron/product-sync", "schedule": "0 * * * *" },
+    { "path": "/api/cron/restock-check", "schedule": "15 * * * *" },
+    { "path": "/api/cron/stalled-detection", "schedule": "30 * * * *" },
+    { "path": "/api/cron/dead-thread-sweep", "schedule": "45 */4 * * *" },
+    { "path": "/api/cron/token-refresh", "schedule": "0 3 * * *" }
+  ]
+}
