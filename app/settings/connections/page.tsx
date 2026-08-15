@@ -25,6 +25,7 @@ export default async function ConnectionsPage({
   const connections = await getConnections(merchant.id);
   const shopify = connections.find((c) => c.kind === 'shopify');
   const instagram = connections.find((c) => c.kind === 'instagram');
+  const stripeConnection = connections.find((c) => c.kind === 'stripe');
 
   const { count: productCount } = await supabaseAdmin()
     .from('products')
@@ -89,6 +90,24 @@ export default async function ConnectionsPage({
             ? `Connected — account ${instagram.provider_account_id}`
             : 'Connected during onboarding. Ask your account manager if this is not showing.'}
         </p>
+      </section>
+
+      <section className="mt-10 border-t border-line pt-8">
+        <div className="flex items-baseline justify-between">
+          <h2 className="text-lg font-medium">Stripe</h2>
+          <StatusPill connected={Boolean(stripeConnection)} />
+        </div>
+        <p className="mt-1 text-sm text-muted">
+          {stripeConnection
+            ? 'Connected. Payments go straight to your Stripe account — we never hold your money.'
+            : 'Lets the agent send a payment link in the conversation. Payments go straight to your own Stripe account.'}
+        </p>
+        <a
+          href="/api/connect/stripe"
+          className="mt-4 inline-block rounded-md border border-line px-4 py-2 text-sm font-medium"
+        >
+          {stripeConnection ? 'Reconnect Stripe' : 'Connect Stripe'}
+        </a>
       </section>
 
       <section className="mt-10 border-t border-line pt-8">

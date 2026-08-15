@@ -1,6 +1,7 @@
 import { supabaseAdmin } from '../supabase/admin';
 import { logEvent } from '../log';
 import { getShopifyCredentials, shopifyGraphQL } from '../shopify/client';
+import { createCheckoutLink } from '../stripe/checkout';
 import type { Tool, ToolContext, ToolDefinition } from './types';
 
 /**
@@ -440,18 +441,68 @@ const createPaymentLink: Tool = {
     },
   },
 
-  async handler(_args, _context) {
-    // Stage 5 replaces this with a Stripe Connect payment link on the merchant's
-    // own account. Returning a structured refusal — rather than throwing — lets the
-    // model recover gracefully and hand off instead of dying mid-conversation.
+  async handler(args, context) {
+    const items = parseCheckoutItems(args.items);
+    if (!items.length) {
+      return { created: false, error: 'no_items', instruction: 'Call search_products first, then use the variantIds it returned.' };
+    }
+
+    const result = await createCheckoutLink({
+      merchantId: context.merchantId,
+      conversationId: context.conversationId,
+      items,
+    });
+
+    if (!result.created) {
+      // Structured refusals rather than throws, so the model can recover and hand
+      // off gracefully instead of the turn dying mid-conversation.
+      return { ...result, instruction: checkoutFailureInstruction(result.error) };
+    }
+
+    // The total is now tool-established, so the price guardrail will let the agent
+    // say it out loud.
+    context.ledger.pricesCents.add(result.amountCents);
+    context.ledger.paymentLinkUrls.add(result.url);
+
     return {
-      created: false,
-      error: 'checkout_not_configured',
-      instruction:
-        'Payment links are not set up for this shop yet. Tell the shopper the owner will send payment details, and call escalate.',
+      created: true,
+      url: result.url,
+      total: formatMoney(result.amountCents, result.currency),
+      totalCents: result.amountCents,
+      instruction: 'Send the link and the total. Do not add any other figures.',
     };
   },
 };
+
+function parseCheckoutItems(raw: unknown): Array<{ variantId: string; quantity: number }> {
+  if (!Array.isArray(raw)) return [];
+
+  return raw
+    .map((entry) => {
+      if (typeof entry !== 'object' || entry === null) return null;
+      const record = entry as Record<string, unknown>;
+      const variantId = typeof record.variantId === 'string' ? record.variantId : null;
+      if (!variantId) return null;
+
+      const quantity = typeof record.quantity === 'number' ? record.quantity : 1;
+      return { variantId, quantity };
+    })
+    .filter((item): item is { variantId: string; quantity: number } => item !== null)
+    .slice(0, 10);
+}
+
+function checkoutFailureInstruction(error: string): string {
+  switch (error) {
+    case 'stripe_not_connected':
+      return 'Checkout is not set up for this shop. Tell the shopper the owner will send payment details, then call escalate.';
+    case 'out_of_stock':
+      return 'That is no longer available. Offer the waitlist instead of a payment link.';
+    case 'unknown_variant':
+      return 'Call search_products again and use a variantId it returned.';
+    default:
+      return 'The link could not be created. Tell the shopper the owner will follow up, then call escalate.';
+  }
+}
 
 // ---------------------------------------------------------------------------
 

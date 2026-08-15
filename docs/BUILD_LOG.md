@@ -318,6 +318,50 @@ the customer row.
   Both fail closed: a false positive costs the merchant an approval tap, a false
   negative costs them a customer.
 
+---
+
+## Stage 5 — Payments
+
+**Done when:** a conversation ends in a paid link and one attributed sale row.
+
+### Shipped
+
+- Stripe Connect via Standard OAuth, with a signed `state` so the callback can
+  prove the merchant coming back is the one who left.
+- `create_payment_link` for real: prices and availability come from our synced
+  catalogue, never from the model, and the charge is made on the merchant's own
+  connected account.
+- Stripe webhook → `payment_links.status` → `attributed_sales`, plus conversation
+  outcome and customer lifetime value.
+- 8 more tests (125 total), all on the OAuth state signing.
+
+### Decisions
+
+- **Checkout Sessions, not Payment Links — a deliberate deviation from §4.3.** The
+  spec's column name implies Stripe's Payment Links API, and the session id is
+  stored there. Payment Links need a pre-existing Price object, so quoting one live
+  is three round trips inside a five-second budget and slowly fills the merchant's
+  Stripe catalogue with throwaway products. Sessions take inline price data: one
+  call, exact catalogue price, nothing left behind. They also expire, which suits a
+  DM sale — an immortal link is a price quote that outlives the stock behind it.
+- **Direct charges on the merchant's account. No platform fee taken.** We are a
+  service they hire, not a payment processor. Pricing is invoiced against revenue
+  generated (§1.1), which keeps us out of the money flow entirely — a platform
+  holding funds is a different business with different obligations. **Worth
+  confirming:** if you ever want the fee collected automatically instead of
+  invoiced, that is a one-line change here, but it changes what we are.
+- **The Stripe API version is pinned.** Letting Stripe pick means a silent API
+  change lands in a payment path with no deploy.
+
+### Review pass — problems found and fixed
+
+- **A sale with no conversation would have crashed the webhook.** The lookup passed
+  an empty string to a uuid column, which Postgres rejects outright. Such a sale is
+  still worth recording — it just cannot be traced to a source.
+- **A mixed-currency basket would have failed opaquely at Stripe.** Now refused
+  with a reason the agent can act on.
+- **Expiry handling was importing modules inside a route handler.** Moved out.
+
 ### Next
 
-Stage 5 — Stripe Connect, payment links, and sale attribution.
+Stage 6 — comments, story replies, and the waitlist.
