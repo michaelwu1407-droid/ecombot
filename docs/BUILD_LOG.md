@@ -362,6 +362,55 @@ the customer row.
   with a reason the agent can act on.
 - **Expiry handling was importing modules inside a route handler.** Moved out.
 
+---
+
+## Stage 6 — Capture surfaces
+
+**Done when:** a buying-intent comment becomes a live conversation, and a sold-out
+enquiry creates a waitlist entry.
+
+### Shipped
+
+- Comment capture: four gates (not the merchant's own comment, not already
+  handled, inside the 7-day reply window, actually a buying signal), then a private
+  reply that opens a conversation.
+- A two-stage intent classifier — deterministic rules first, a cheap model call
+  only for the ambiguous middle.
+- Private replies routed through the comment endpoint, with the 7-day comment
+  window rather than the 24-hour DM window.
+- Story replies handled as their own source, with the agent told it cannot see the
+  story it is replying to.
+- Waitlist confirmed working end to end from the tool built in stage 3.
+- 41 more tests (166 total), all on intent classification.
+
+### Decisions
+
+- **Nothing is written until intent passes.** A post gets 47 comments and nine are
+  buying signals (§1.3). Creating a conversation per comment would fill the
+  merchant's customer list with people who wrote "obsessed 😍".
+- **The ambiguous middle is the only thing worth a model call.** A bare question
+  with no buying words gets one; everything the rules settle does not. A 47-comment
+  post costs a handful of calls, not 47.
+- **The classifier fails quiet.** If the model is unreachable, the answer is
+  "noise". An outage must not turn into unsolicited DMs from a merchant's account —
+  that is the account-restriction risk §1.7 calls fatal.
+- **The comment claim is taken before the intent check.** Two concurrent deliveries
+  of the same comment cannot then both decide to reply, and Meta allows exactly one
+  private reply per comment, ever.
+
+### Review pass — problems found and fixed
+
+- **Every comment reply would have been queued instead of sent.** The delivery path
+  applied the 24-hour DM window to private replies. A commenter has by definition
+  never sent a DM, so that window is the wrong clock — a private reply is legal for
+  7 days from the comment. This would have silently disabled the single
+  highest-value feature.
+- **"link?" was not recognised as a buying signal.** Same shape of bug as the two
+  in stage 4: an alternative ending in `$` inside a group closed by `\b` can never
+  match. One-word asks now have their own pattern.
+- **The first draft of the claim logic wrote a placeholder merchant id** that would
+  have violated the foreign key. Rewritten to resolve the merchant first.
+
 ### Next
 
-Stage 6 — comments, story replies, and the waitlist.
+Stage 7 — restock notifications and dead thread revival, with rate limits and caps.

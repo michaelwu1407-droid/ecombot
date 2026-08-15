@@ -1,6 +1,7 @@
 import { after } from 'next/server';
 import { getMessagingProvider } from '@/lib/messaging';
 import { runShopperTurn } from '@/lib/agent/run';
+import { handleCommentEvent } from '@/lib/capture/comments';
 import { claimEvent, ingestInboundEvent, releaseEvent } from '@/lib/inbound';
 import { logEvent } from '@/lib/log';
 
@@ -56,6 +57,26 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   if (!claimed) return Response.json({ ok: true, duplicate: true });
+
+  // Comments take their own path: most of them are not leads, and one that is
+  // needs a private reply rather than a DM. Nothing is written until the intent
+  // check has passed, so a post with 47 comments does not create 47 conversations.
+  if (event.type === 'comment') {
+    after(async () => {
+      try {
+        await handleCommentEvent(event);
+      } catch (commentError) {
+        console.error('[webhook] comment capture failed', commentError);
+        await logEvent(null, 'comment.processing_failed', {
+          commentId: event.commentId,
+          providerAccountId: event.providerAccountId,
+          message: commentError instanceof Error ? commentError.message : String(commentError),
+        });
+      }
+    });
+
+    return Response.json({ ok: true, kind: 'comment' });
+  }
 
   try {
     const ingested = await ingestInboundEvent(event);

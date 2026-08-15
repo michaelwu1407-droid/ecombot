@@ -14,7 +14,7 @@ import { mockProvider } from './providers/mock';
 
 export type { InboundEvent, Message, MessagingProvider, SendResult } from './types';
 export { MessagingError } from './types';
-export { isWithinMessagingWindow, messagingWindowState } from './window';
+export { isWithinMessagingWindow, messagingWindowState, canPrivateReplyToComment } from './window';
 
 let override: MessagingProvider | null = null;
 

@@ -51,6 +51,12 @@ export async function runShopperTurn(params: {
   merchantId: string;
   conversationId: string;
   customerId: string;
+  /**
+   * Set when this turn answers a public comment. Meta requires the reply to go
+   * out through the comment endpoint — it is what opens a private thread with
+   * someone who has never messaged the shop.
+   */
+  comment?: { commentId: string; postId: string };
 }): Promise<TurnResult> {
   const startedAt = Date.now();
   const ledger = emptyLedger();
@@ -220,11 +226,12 @@ export async function runShopperTurn(params: {
     merchantId: params.merchantId,
     conversationId: params.conversationId,
     text: draft,
-    kind: 'reply',
+    kind: params.comment ? 'private_reply' : 'reply',
     toolCalls: summariseLedger(ledger),
     blockedReason: verdict.action === 'block' ? verdict.reason : undefined,
     ledger,
     config: context.config,
+    comment: params.comment,
   });
 
   // The escalate tool marks the conversation escalated; anything else that reached

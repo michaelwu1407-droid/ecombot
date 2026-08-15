@@ -82,6 +82,12 @@ export function buildShopperSystemPrompt(context: ShopperContext): string {
     );
   }
 
+  if (context.source === 'story_reply') {
+    sections.push(
+      'They replied to one of your stories, so they are reacting to something specific they just saw. You cannot see the story. If it is not obvious what they mean, ask which piece they are asking about rather than guessing.'
+    );
+  }
+
   // Last, so it is closest to the untrusted content in the message list.
   sections.push(
     [

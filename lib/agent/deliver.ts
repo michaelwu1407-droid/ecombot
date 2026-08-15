@@ -32,6 +32,12 @@ export interface DeliveryRequest {
    */
   ledger: TurnLedger;
   config: AgentConfig;
+  /**
+   * Set for a private reply to a comment. Meta allows exactly one per comment,
+   * and it opens a thread with someone who has never messaged the shop — so it
+   * goes out through the comment endpoint, not as a plain DM.
+   */
+  comment?: { commentId: string; postId: string };
 }
 
 export async function deliverReply(request: DeliveryRequest): Promise<DeliveryOutcome> {
@@ -97,6 +103,7 @@ export async function deliverReply(request: DeliveryRequest): Promise<DeliveryOu
     blocked: Boolean(blockedReason),
     autoSend: config?.auto_send === true,
     lastInboundAt: conversation.last_inbound_at ? new Date(conversation.last_inbound_at) : null,
+    isPrivateReply: Boolean(request.comment),
   });
 
   if (queueReason) {
@@ -114,16 +121,28 @@ export async function deliverReply(request: DeliveryRequest): Promise<DeliveryOu
     return { status: 'queued', messageId, reason: queueReason };
   }
 
-  if (!connection?.provider_account_id || !conversation.participant_id) {
+  if (!connection?.provider_account_id) {
     return { status: 'failed', error: 'no connected Instagram account for this conversation' };
+  }
+  if (!request.comment && !conversation.participant_id) {
+    return { status: 'failed', error: 'conversation has no participant to reply to' };
   }
 
   try {
-    const result = await getMessagingProvider().sendMessage(
-      connection.provider_account_id,
-      conversation.participant_id,
-      request.text
-    );
+    const provider = getMessagingProvider();
+
+    const result = request.comment
+      ? await provider.sendPrivateReplyToComment(
+          connection.provider_account_id,
+          request.comment.commentId,
+          request.text,
+          request.comment.postId
+        )
+      : await provider.sendMessage(
+          connection.provider_account_id,
+          conversation.participant_id!,
+          request.text
+        );
 
     const messageId = await recordMessage(request, {
       status: 'sent',
@@ -162,9 +181,18 @@ function decideQueueReason(params: {
   blocked: boolean;
   autoSend: boolean;
   lastInboundAt: Date | null;
+  isPrivateReply: boolean;
 }): 'blocked' | 'suggest_mode' | 'window_closed' | null {
   if (params.blocked) return 'blocked';
   if (!params.autoSend) return 'suggest_mode';
+
+  // A private reply to a comment runs on its own clock — 7 days from the comment,
+  // not 24 hours from a DM the person has never sent. Applying the DM window here
+  // would queue every single comment reply, which is the whole feature.
+  // canPrivateReplyToComment is checked before the reply is drafted, in the
+  // capture path, so by here it is already known to be inside its window.
+  if (params.isPrivateReply) return null;
+
   // Outside 24 hours Meta only delivers under a tag scoped to human agents, so
   // the merchant approves it and the tag stays honest (see lib/messaging/window.ts).
   if (!isWithinMessagingWindow(params.lastInboundAt)) return 'window_closed';
