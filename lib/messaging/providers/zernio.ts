@@ -131,6 +131,46 @@ export const zernioProvider: MessagingProvider = {
       createdAt: new Date(m.sentAt),
     }));
   },
+
+  /**
+   * Walks the merchant's recent threads and collects what they sent.
+   *
+   * Note from the provider docs: when an Instagram account connects, Meta's
+   * existing DM history is replayed into the inbox in the background, keeping its
+   * real timestamps — so a sweep run immediately after connecting can look
+   * complete while missing years of it. Onboarding runs this once, and the
+   * merchant can re-run it later to pick up the rest.
+   */
+  async listRecentOutboundMessages(accountId, limit): Promise<Message[]> {
+    const conversations = await call<Array<{ id: string }>>(
+      `/inbox/conversations?accountId=${encodeURIComponent(accountId)}&limit=25`,
+      { method: 'GET' }
+    );
+
+    const collected: Message[] = [];
+
+    for (const conversation of Array.isArray(conversations) ? conversations : []) {
+      if (collected.length >= limit) break;
+
+      const messages = await call<Array<{ id: string; direction: string; text: string | null; sentAt: string }>>(
+        `/inbox/conversations/${encodeURIComponent(conversation.id)}/messages?limit=20`,
+        { method: 'GET' }
+      );
+
+      for (const message of Array.isArray(messages) ? messages : []) {
+        if (message.direction === 'incoming' || !message.text) continue;
+        collected.push({
+          id: message.id,
+          direction: 'outbound',
+          text: message.text,
+          createdAt: new Date(message.sentAt),
+        });
+        if (collected.length >= limit) break;
+      }
+    }
+
+    return collected;
+  },
 };
 
 // ---------------------------------------------------------------------------

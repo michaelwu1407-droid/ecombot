@@ -116,6 +116,15 @@ export class MockMessagingProvider implements MessagingProvider {
   async getConversationHistory(accountId: string, participantId: string, limit: number): Promise<Message[]> {
     return (this.history.get(`${accountId}:${participantId}`) ?? []).slice(-limit);
   }
+
+  async listRecentOutboundMessages(accountId: string, limit: number): Promise<Message[]> {
+    const all: Message[] = [];
+    for (const [key, messages] of this.history) {
+      if (!key.startsWith(`${accountId}:`)) continue;
+      all.push(...messages.filter((message) => message.direction === 'outbound'));
+    }
+    return all.slice(0, limit);
+  }
 }
 
 /** Shared instance, so a test can assert on what the webhook route sent. */

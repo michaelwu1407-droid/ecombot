@@ -567,6 +567,160 @@ and the shopper agent enforces it on the next conversation.
 - **`operator_batch` was not an accepted delivery kind**, so a confirmed batch
   would have failed at the type boundary.
 
-### Next
+---
 
-Stage 10 — onboarding wizard, Sentry, webhook rate limiting, founder admin views.
+## Stage 10 — Onboarding and hardening
+
+**Done when:** a new merchant goes from signup to live agent without anyone
+touching the database.
+
+### Shipped
+
+- Onboarding wizard: connect Instagram, connect Shopify, teach it your voice, set
+  your rules, take payments, go live. Going live is a deliberate press, and even
+  then suggest mode holds every reply.
+- Voice learning two ways: import the merchant's own past replies from the
+  provider, or paste examples. Either works; neither blocks the other.
+- Sentry, with credentials *and customer message text* scrubbed before anything
+  leaves. We are handling other people's shoppers' conversations, and an error
+  report is not a reason to copy them to a third party.
+- Rate limiting on the webhook endpoint.
+- Founder views: merchant list and health.
+- Daily credential check.
+- 11 more tests (217 total).
+
+### Decisions
+
+- **`listRecentOutboundMessages` added to the messaging interface**, optional. Voice
+  fidelity is the adoption blocker (§1.6), and reading how she already writes means
+  reading her outbox, not one thread at a time. Optional so a provider that cannot
+  do it degrades to pasting rather than failing onboarding.
+- **Webhook rate limiting is in-process, not global.** The real protection on that
+  endpoint is the HMAC signature — without the secret nothing reaches the parser.
+  What this guards against is a redelivery storm from a legitimate provider, where
+  per-instance limits still shed load. A global limit needs Redis, which §4.1
+  forbids, or a database round trip on a five-second path. **Flag:** if a global
+  limit ever becomes genuinely necessary, that is the moment to reopen the
+  Redis/queue conversation.
+- **"Token refresh" is a credential health check.** Nothing we hold auto-expires:
+  Shopify custom app tokens are long-lived, Stripe Connect uses account ids, and the
+  bridge provider holds the Instagram tokens. What the job does catch is a revoked
+  token, before the merchant discovers it as an agent quoting yesterday's stock.
+  Only a rejection marks a connection dead — a network blip must not knock a
+  working merchant offline.
+- **Stripe is not required to go live.** An agent that answers well without taking
+  payment is still worth having, and §4.9 is reached in stages.
+- **Shopify counts as connected only once the catalogue has landed.** A valid token
+  with an empty catalogue would let an agent go live with nothing to ground answers
+  in.
+- **A non-admin gets a 404 on the founder view**, not a permission error. There is
+  no reason for a merchant to learn it exists.
+
+### Review pass — problems found and fixed
+
+- **Near-duplicate voice examples slipped through.** The fingerprint stripped
+  punctuation but collapsed whitespace first, so an em dash left two spaces behind
+  and two near-identical replies fingerprinted differently. A merchant who types
+  "still available!" forty times would have got forty examples of it.
+
+---
+
+# §4.10 — Report back on
+
+The spec asks for five specific things. All five, answered honestly.
+
+## 1. Does the messaging provider support inbound webhooks and comment events?
+
+**Yes, both, plus per-merchant accounts.** Verified against Zernio's documentation
+before a line of the adapter was written. Full detail in Stage 0 above.
+
+The one that could have killed the plan was comments. Zernio also sells a no-code
+keyword automation for comment-to-DM, which would have been unusable — it matches
+keywords, and this product needs its own intent check. The raw `comment.received`
+webhook is what makes §2.3 possible, and it exists.
+
+**The finding that does change the plan** is not a provider limitation but Meta's:
+the 24-hour messaging window constrains §2.5 more tightly than the spec assumed.
+Restock notifications and dead-thread revivals mostly land outside it, and the only
+extension Instagram offers is a tag scoped to human agents. Decided: merchant
+one-tap approval. Meta's Marketing Messages API would fit the waitlist case exactly
+and make it fully automatic — Zernio does not expose it for Instagram yet, so it is
+a later unlock rather than a redesign.
+
+## 2. Dependencies I was tempted to add and did not
+
+| Wanted | Instead | Would revisit if |
+|---|---|---|
+| A test framework (vitest/jest) | `node --test` plus a 40-line resolve hook using Node's own `module.registerHooks` | The hook starts costing more than it saves |
+| A schema validator (zod) | Hand-written parsers for the webhook payloads; tool arguments validated in the handlers | Operator tool arguments grow much past their current size |
+| Redis / a queue | Next's `after()` for the agent turn; an in-process token bucket for webhook limits | A *global* webhook rate limit becomes genuinely necessary |
+| A Shopify SDK | Plain fetch against the GraphQL Admin API — the surface used is two queries wide | Never, at this scope |
+
+Added, all from §4.1's own list: `stripe`, `@sentry/nextjs`, `tailwindcss`.
+
+## 3. Guardrails that proved impractical to enforce in code
+
+**None of the eight had to be dropped.** Two are worth being honest about:
+
+- **Price checking** needs a ledger of what tools returned this turn, and needs to
+  allow sums and floor-bounded discounts or bundles and negotiation break — both of
+  which §2.2 explicitly asks for. It also only catches figures with a currency
+  marker: "it's 45" passes unchecked, because treating bare numbers as prices would
+  block "a size 10" and "2 left" and therefore almost every real reply.
+- **Unfounded promises** is regex over natural language, so it will have false
+  positives.
+
+Both fail closed, which is the right direction: a false positive costs the merchant
+one approval tap, a false negative costs them a customer.
+
+The guardrails also run inside `deliverReply`, not only in the shopper loop, so
+every send path added later is covered by construction.
+
+## 4. Actual shopper-agent latency
+
+**Unmeasured, and I will not guess.** No OpenRouter key exists in this environment,
+so there is no honest number to report.
+
+What is in place: every turn logs `latencyMs` end to end, and each model call logs
+its own. The structural question is whether two model round trips — one to pick
+tools, one to write the reply — fit inside five seconds on the pinned model.
+
+The design does not depend on the answer. The turn runs against a wall-clock
+deadline: at 5 seconds it drops its tools and makes one final text-only call, so a
+slow turn degrades to "slightly less researched" rather than to silence. **First
+thing to measure once a key exists**, and the number belongs in this document.
+
+## 5. Anything in Part 3 that turned out to be the wrong call
+
+**Nothing.** Each decision held up, and two were tested by the code:
+
+- **§3.1, no framework.** The shopper loop is ~120 lines including logging and the
+  deadline logic. Nothing in the build wanted task decomposition or subagents. The
+  Hermes addendum (§3.7) is the sharpest version of this: even where an agent
+  framework is genuinely better at something, it enters as one tool inside our loop
+  rather than as the runtime.
+- **§3.3, guardrails in code.** Three regex bugs were found by tests — "safe for
+  pregnancy", "gets to you tomorrow", and "link?" — each of which would have reached
+  a real customer, and none of which any amount of prompt wording would have caught.
+
+One thing to flag rather than a wrong call: **§4.3's `stripe_payment_link_id`
+implies Stripe's Payment Links API**, and we use a Checkout Session instead. The
+reasoning is in Stage 5. The column name was kept.
+
+---
+
+# What is not done
+
+Honest list of what stands between this and §4.9 working on a real account.
+
+- **No live credentials anywhere.** Every integration is written against documented
+  APIs and tested at the boundary with fakes. Nothing has spoken to Instagram,
+  Shopify, Stripe or OpenRouter.
+- **The §4.9 end-to-end path is unproven.** Each link in it exists and is tested in
+  isolation. The chain has never been run.
+- **Latency is unmeasured.** See above.
+- **"Run live on a real Instagram account for a full day"** (§4.7 step 10) has not
+  happened.
+
+The next real milestone is not more code. It is credentials, and then one day of
+watching real conversations.

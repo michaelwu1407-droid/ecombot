@@ -75,5 +75,24 @@ agents, then nothing.
 
 ## Build state
 
-Stage 1 of 10 (§4.7). See `docs/BUILD_LOG.md` for what is done, what was deviated
-from, and what is flagged for the founder.
+All ten stages of §4.7 are built. 217 tests, no network or credentials required.
+
+What is **not** done: nothing has spoken to a live Instagram, Shopify, Stripe or
+OpenRouter account, so the §4.9 end-to-end path is unproven and shopper-agent
+latency is unmeasured. Every integration is written against documented APIs and
+tested at the boundary with fakes.
+
+`docs/BUILD_LOG.md` is the full record — every deviation, decision, and problem the
+review pass caught, plus the §4.10 report-back.
+
+## Deploying
+
+1. Create a Supabase project and apply `supabase/migrations/` in order.
+2. Set the environment variables from `.env.example` in Vercel.
+3. Point the Zernio webhook at `/api/webhooks/messaging`, subscribed to
+   `message.received` and `comment.received`.
+4. Point the Stripe webhook at `/api/webhooks/stripe`, listening to **connected
+   account** events: `checkout.session.completed`,
+   `checkout.session.async_payment_succeeded`, `checkout.session.expired`.
+5. Add yourself to `platform_admins` to reach `/admin`.
+6. Onboard the first merchant through `/onboarding`.

@@ -2,6 +2,7 @@ import { after } from 'next/server';
 import { getMessagingProvider } from '@/lib/messaging';
 import { runShopperTurn } from '@/lib/agent/run';
 import { handleCommentEvent } from '@/lib/capture/comments';
+import { allowWebhook } from '@/lib/webhook-rate-limit';
 import { claimEvent, ingestInboundEvent, releaseEvent } from '@/lib/inbound';
 import { logEvent } from '@/lib/log';
 
@@ -39,6 +40,13 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   const event = provider.parseInboundEvent(payload);
+
+  // Limited per account, after the signature check — a signed payload is from the
+  // provider, so this is shedding a redelivery storm, not repelling an attacker.
+  // 429 asks them to back off and retry rather than dropping the message.
+  if (event && !allowWebhook(event.providerAccountId)) {
+    return Response.json({ error: 'slow down' }, { status: 429 });
+  }
 
   // Events we do not act on — a delivery receipt, a non-Instagram account, an
   // outbound echo — are acknowledged. Returning an error would earn seven retries

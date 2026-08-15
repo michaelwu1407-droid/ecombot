@@ -72,6 +72,17 @@ export interface MessagingProvider {
   parseInboundEvent(payload: unknown): InboundEvent | null;
 
   getConversationHistory(accountId: string, participantId: string, limit: number): Promise<Message[]>;
+
+  /**
+   * Recent messages the merchant themselves sent, across all their threads.
+   *
+   * Not in the spec's interface, and added for one reason: voice fidelity is the
+   * adoption blocker, not accuracy (§1.6). Onboarding has to be able to read how
+   * she already writes, and that means reading her outbox, not one thread at a
+   * time. Optional, because a provider that cannot do it should degrade to the
+   * merchant pasting examples rather than failing onboarding.
+   */
+  listRecentOutboundMessages?(accountId: string, limit: number): Promise<Message[]>;
 }
 
 /**

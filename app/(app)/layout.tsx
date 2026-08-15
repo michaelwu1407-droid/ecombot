@@ -40,6 +40,15 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           </span>
 
           <nav className="flex flex-1 items-center gap-1">
+            {/* Setup leads the nav until they are live, then disappears. */}
+            {merchant.status !== 'active' && (
+              <Link
+                href="/onboarding"
+                className="rounded-md px-3 py-1.5 text-sm font-medium text-accent hover:bg-surface"
+              >
+                Set up
+              </Link>
+            )}
             {NAV.map((item) => (
               <Link
                 key={item.href}
