@@ -31,7 +31,13 @@ export interface InboundEvent {
   /** Provider event id. The dedupe key — delivery is at-least-once. */
   eventId: string;
   timestamp: Date;
-  type: 'dm' | 'comment' | 'story_reply';
+  /**
+   * `merchant_reply` is a message sent from the merchant's own account that we did
+   * not send — she answered in the Instagram app. It arrives on the same outbound
+   * event as our own sends and is told apart downstream by whether we recorded the
+   * provider message id first.
+   */
+  type: 'dm' | 'comment' | 'story_reply' | 'merchant_reply';
   /** Present when type === 'comment'. */
   commentId?: string;
   /** Present when type === 'comment'. Required to send a private reply. */
@@ -40,6 +46,8 @@ export interface InboundEvent {
   isReply?: boolean;
   /** Present for DMs and story replies; lets a reply thread into the existing conversation. */
   providerConversationId?: string;
+  /** Present on merchant_reply — the provider's own message id, used to tell her sends from ours. */
+  providerMessageId?: string;
 }
 
 export interface Message {

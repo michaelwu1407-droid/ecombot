@@ -33,7 +33,9 @@ export async function runDeadThreadSweep(
 
   const { data: conversations, error } = await db
     .from('conversations')
-    .select('id, customer_id, last_message_at, last_inbound_at, outcome, revival_sent_at, status')
+    .select(
+      'id, customer_id, last_message_at, last_inbound_at, outcome, revival_sent_at, status, merchant_took_over_at'
+    )
     .eq('merchant_id', merchantId)
     .in('status', ['stalled', 'active'])
     .is('outcome', null)
@@ -55,6 +57,9 @@ export async function runDeadThreadSweep(
         outcome: conversation.outcome,
         revivalSentAt: conversation.revival_sent_at ? new Date(conversation.revival_sent_at) : null,
         status: conversation.status,
+        merchantTookOverAt: conversation.merchant_took_over_at
+          ? new Date(conversation.merchant_took_over_at)
+          : null,
       },
       now
     );

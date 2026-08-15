@@ -86,8 +86,32 @@ describe('parseZernioEvent', () => {
     assert.equal(event.type, 'story_reply');
   });
 
-  test('ignores our own outbound message echoed back', () => {
-    assert.equal(parseZernioEvent(dmEvent({ direction: 'outgoing' })), null);
+  test('parses an outbound message rather than dropping it', () => {
+    // This used to return null, which quietly threw away the merchant's own
+    // replies typed in the Instagram app — so the agent answered messages she had
+    // already answered, contradicting her in her own inbox. Both her sends and our
+    // echoes arrive here; telling them apart needs the database, so both are
+    // parsed and resolved downstream.
+    const event = parseZernioEvent(dmEvent({ direction: 'outgoing' }));
+    assert.ok(event);
+    assert.equal(event.type, 'merchant_reply');
+    assert.equal(event.providerMessageId, 'ig_1');
+    assert.equal(event.providerConversationId, 'conv_1');
+  });
+
+  test('parses a message.sent event the same way', () => {
+    const payload = dmEvent({ direction: 'outgoing' });
+    payload.event = 'message.sent';
+    const event = parseZernioEvent(payload);
+    assert.ok(event);
+    assert.equal(event.type, 'merchant_reply');
+  });
+
+  test('ignores an outbound event with no message id to match against', () => {
+    // Without an id we cannot tell our own echo from her reply, and guessing
+    // either way is worse than ignoring it.
+    const payload = dmEvent({ direction: 'outgoing', platformMessageId: null, id: null });
+    assert.equal(parseZernioEvent(payload), null);
   });
 
   test('ignores an attachment-only message with no text to answer', () => {

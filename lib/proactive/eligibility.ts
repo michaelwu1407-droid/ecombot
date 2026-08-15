@@ -19,6 +19,8 @@ export interface RevivalCandidate {
   outcome: string | null;
   revivalSentAt: Date | null;
   status: string;
+  /** She answered this thread herself in the Instagram app. */
+  merchantTookOverAt?: Date | null;
 }
 
 export type RevivalDecision =
@@ -36,7 +38,7 @@ export function decideRevival(candidate: RevivalCandidate, now: Date = new Date(
     return { eligible: false, reason: 'already revived', retire: false };
   }
 
-  if (candidate.status === 'escalated') {
+  if (candidate.status === 'escalated' || candidate.merchantTookOverAt) {
     return { eligible: false, reason: 'the merchant is handling this one', retire: false };
   }
 

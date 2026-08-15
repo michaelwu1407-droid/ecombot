@@ -108,6 +108,16 @@ export async function deliverReply(request: DeliveryRequest): Promise<DeliveryOu
   });
 
   if (queueReason) {
+    // A second shopper message used to produce a second, independent draft that
+    // could not see the first — two replies on one thread that might disagree, and
+    // approving both sent both. The newest draft has the whole conversation in it,
+    // so the older one is retired rather than left waiting.
+    await db
+      .from('messages')
+      .update({ status: 'superseded' })
+      .eq('conversation_id', request.conversationId)
+      .in('status', ['pending_approval', 'blocked']);
+
     const messageId = await recordMessage(request, {
       status: queueReason === 'blocked' ? 'blocked' : 'pending_approval',
       blockedReason: blockedReason ?? queueReasonText(queueReason),

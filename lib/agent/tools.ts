@@ -2,6 +2,7 @@ import { supabaseAdmin } from '../supabase/admin';
 import { logEvent } from '../log';
 import { getShopifyCredentials, shopifyGraphQL } from '../shopify/client';
 import { createCheckoutLink } from '../stripe/checkout';
+import { catalogueState, STALE_CATALOGUE_INSTRUCTION } from '../catalogue';
 import type { Tool, ToolContext, ToolDefinition } from './types';
 
 /**
@@ -46,6 +47,14 @@ const searchProducts: Tool = {
     const query = typeof args.query === 'string' ? args.query.trim() : '';
     const size = typeof args.size === 'string' ? args.size.trim() : null;
     if (!query) return { error: 'query is required' };
+
+    // A stale catalogue is worse than no catalogue: it answers confidently and
+    // wrongly. Nothing is returned, so the price guardrail has no figures to
+    // permit either — belt and braces.
+    const catalogue = await catalogueState(context.merchantId);
+    if (!catalogue.fresh) {
+      return { error: 'catalogue_unavailable', reason: catalogue.reason, instruction: STALE_CATALOGUE_INSTRUCTION };
+    }
 
     const db = supabaseAdmin();
     let builder = db
@@ -120,6 +129,11 @@ const checkStock: Tool = {
   async handler(args, context) {
     const variantId = typeof args.variantId === 'string' ? args.variantId : '';
     if (!variantId) return { error: 'variantId is required' };
+
+    const catalogue = await catalogueState(context.merchantId);
+    if (!catalogue.fresh) {
+      return { error: 'catalogue_unavailable', reason: catalogue.reason, instruction: STALE_CATALOGUE_INSTRUCTION };
+    }
 
     const { data, error } = await supabaseAdmin()
       .from('products')

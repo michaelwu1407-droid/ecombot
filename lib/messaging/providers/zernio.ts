@@ -210,10 +210,37 @@ export function parseZernioEvent(payload: unknown): InboundEvent | null {
 
   const timestamp = str(root.timestamp) ? new Date(str(root.timestamp)!) : new Date();
 
+  // An outbound message from the merchant's account is either our own send coming
+  // back, or the owner answering in the Instagram app herself. Both look identical
+  // here; only the database knows which, so both are parsed and told apart in
+  // `ingestOutboundEvent`. Dropping them wholesale — as this used to — meant her
+  // replies never reached the conversation and the agent talked over her.
+  if (eventName === 'message.sent' || (eventName === 'message.received' && isOutgoing(root))) {
+    const message = obj(root.message);
+    if (!message) return null;
+
+    const text = str(message.text);
+    const platformMessageId = str(message.platformMessageId) ?? str(message.id);
+    if (!text || !platformMessageId) return null;
+
+    return {
+      providerAccountId,
+      // The thread belongs to the shopper, not to whoever typed this message.
+      senderId: providerAccountId,
+      senderHandle: account ? str(account.username) : null,
+      senderName: null,
+      text,
+      eventId,
+      timestamp: str(message.sentAt) ? new Date(str(message.sentAt)!) : timestamp,
+      type: 'merchant_reply',
+      providerMessageId: platformMessageId,
+      providerConversationId: str(message.conversationId) ?? undefined,
+    };
+  }
+
   if (eventName === 'message.received') {
     const message = obj(root.message);
     if (!message) return null;
-    if (str(message.direction) === 'outgoing') return null; // our own send, echoed back
 
     const sender = obj(message.sender);
     const senderId = sender ? str(sender.id) : null;
@@ -261,6 +288,12 @@ export function parseZernioEvent(payload: unknown): InboundEvent | null {
   }
 
   return null;
+}
+
+/** Zernio marks the business's own messages `outgoing` on the inbox events. */
+function isOutgoing(root: Record<string, unknown>): boolean {
+  const message = obj(root.message);
+  return Boolean(message && str(message.direction) === 'outgoing');
 }
 
 /**

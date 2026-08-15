@@ -3,7 +3,13 @@ import { getMessagingProvider } from '@/lib/messaging';
 import { runShopperTurn } from '@/lib/agent/run';
 import { handleCommentEvent } from '@/lib/capture/comments';
 import { allowWebhook } from '@/lib/webhook-rate-limit';
-import { claimEvent, ingestInboundEvent, releaseEvent } from '@/lib/inbound';
+import {
+  agentMayReply,
+  claimEvent,
+  ingestInboundEvent,
+  ingestOutboundEvent,
+  releaseEvent,
+} from '@/lib/inbound';
 import { logEvent } from '@/lib/log';
 
 /**
@@ -66,6 +72,21 @@ export async function POST(req: Request): Promise<Response> {
 
   if (!claimed) return Response.json({ ok: true, duplicate: true });
 
+  // A message from the merchant's own account. Either our echo, or the owner
+  // answering in the Instagram app — in which case the agent stands down on that
+  // thread rather than talking over her.
+  if (event.type === 'merchant_reply') {
+    after(async () => {
+      try {
+        await ingestOutboundEvent(event);
+      } catch (outboundError) {
+        console.error('[webhook] could not record an outbound message', outboundError);
+      }
+    });
+
+    return Response.json({ ok: true, kind: 'merchant_reply' });
+  }
+
   // Comments take their own path: most of them are not leads, and one that is
   // needs a private reply rather than a DM. Nothing is written until the intent
   // check has passed, so a post with 47 comments does not create 47 conversations.
@@ -92,6 +113,18 @@ export async function POST(req: Request): Promise<Response> {
 
     after(async () => {
       try {
+        // The message is saved either way. Whether the agent may answer is a
+        // separate question — she may be paused, still setting up, or already
+        // handling this thread herself.
+        const permission = await agentMayReply(ingested.merchantId, ingested.conversationId);
+        if (!permission.allowed) {
+          await logEvent(ingested.merchantId, 'agent.stood_down', {
+            conversationId: ingested.conversationId,
+            reason: permission.reason,
+          });
+          return;
+        }
+
         await runShopperTurn({
           merchantId: ingested.merchantId,
           conversationId: ingested.conversationId,

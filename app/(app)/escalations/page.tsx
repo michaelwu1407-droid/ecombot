@@ -117,10 +117,25 @@ function ReplyCard({
         <span className="text-xs text-muted">{SOURCE_LABELS[reply.source] ?? reply.source}</span>
       </header>
 
-      {reply.lastCustomerMessage && (
-        <div className="border-b border-line bg-surface px-4 py-3">
-          <p className="text-xs text-muted">They said</p>
-          <p className="mt-1 text-sm text-secondary">{reply.lastCustomerMessage}</p>
+      {reply.thread.length > 0 && (
+        <div className="flex flex-col gap-2 border-b border-line bg-surface px-4 py-3">
+          <p className="text-xs text-muted">The conversation so far</p>
+          {reply.thread.map((message) => (
+            <p
+              key={message.id}
+              className={
+                message.from === 'customer'
+                  ? 'max-w-[85%] self-start rounded-lg bg-white px-3 py-1.5 text-sm text-secondary'
+                  : 'max-w-[85%] self-end rounded-lg bg-ink/5 px-3 py-1.5 text-sm text-secondary'
+              }
+            >
+              {/* She needs to know which replies were hers, not the agent's. */}
+              {message.from === 'merchant' && (
+                <span className="mr-1.5 text-xs text-muted">You</span>
+              )}
+              {message.content}
+            </p>
+          ))}
         </div>
       )}
 

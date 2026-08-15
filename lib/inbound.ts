@@ -56,7 +56,14 @@ export async function releaseEvent(eventId: string): Promise<void> {
   }
 }
 
-/** Maps the provider's account id to the merchant who owns that Instagram account. */
+/**
+ * Maps the provider's account id to the merchant who owns that Instagram account.
+ *
+ * Returns the merchant whether or not they are live, because an inbound message is
+ * still worth recording for a merchant who is paused or still setting up — they
+ * should see the conversation when they come back. Whether the *agent* may act is a
+ * separate question, answered by `agentMayReply`.
+ */
 export async function merchantForProviderAccount(providerAccountId: string): Promise<string | null> {
   const { data } = await supabaseAdmin()
     .from('connections')
@@ -67,6 +74,56 @@ export async function merchantForProviderAccount(providerAccountId: string): Pro
     .maybeSingle();
 
   return data?.merchant_id ?? null;
+}
+
+export type ReplyBlock = 'not_live' | 'paused' | 'escalated' | 'merchant_took_over';
+
+/**
+ * Whether the agent is allowed to answer on this conversation right now.
+ *
+ * Checked in one place, on every path that could produce a reply, because each of
+ * these was previously a way for the agent to speak when it should have stayed
+ * quiet:
+ *
+ *   * **not_live** — she connects Instagram at step one of onboarding, long before
+ *     she presses Go live. Without this the agent starts answering real customers
+ *     before it has learned her voice or synced her catalogue.
+ *   * **paused** — Pause is a safety control. It has to actually stop the agent, or
+ *     it is worse than not having the button.
+ *   * **escalated** — the agent has already told this shopper the owner will come
+ *     back to them personally. Answering the next message itself makes that a lie.
+ *   * **merchant_took_over** — she replied herself in the Instagram app. The agent
+ *     does not talk over the owner in her own inbox.
+ */
+export async function agentMayReply(
+  merchantId: string,
+  conversationId: string
+): Promise<{ allowed: true } | { allowed: false; reason: ReplyBlock }> {
+  const db = supabaseAdmin();
+
+  const [merchant, conversation] = await Promise.all([
+    db.from('merchants').select('status').eq('id', merchantId).maybeSingle(),
+    db
+      .from('conversations')
+      .select('status, merchant_took_over_at')
+      .eq('id', conversationId)
+      .eq('merchant_id', merchantId)
+      .maybeSingle(),
+  ]);
+
+  const status = merchant.data?.status;
+  if (status === 'paused') return { allowed: false, reason: 'paused' };
+  if (status !== 'active') return { allowed: false, reason: 'not_live' };
+
+  if (conversation.data?.status === 'escalated') {
+    return { allowed: false, reason: 'escalated' };
+  }
+
+  if (conversation.data?.merchant_took_over_at) {
+    return { allowed: false, reason: 'merchant_took_over' };
+  }
+
+  return { allowed: true };
 }
 
 export async function ingestInboundEvent(event: InboundEvent): Promise<IngestResult | null> {
@@ -106,9 +163,17 @@ export async function ingestInboundEvent(event: InboundEvent): Promise<IngestRes
 
   // last_inbound_at is what the 24-hour messaging window is measured from, so it
   // has to move on every inbound message, not only on new conversations.
+  //
+  // Clearing merchant_took_over_at here is what ends the stand-down: she answered,
+  // the shopper has now replied to her, and the agent picks the thread back up with
+  // her message in its history.
   await db
     .from('conversations')
-    .update({ last_message_at: event.timestamp.toISOString(), last_inbound_at: event.timestamp.toISOString() })
+    .update({
+      last_message_at: event.timestamp.toISOString(),
+      last_inbound_at: event.timestamp.toISOString(),
+      merchant_took_over_at: null,
+    })
     .eq('id', conversationId);
 
   await logEvent(merchantId, 'inbound.received', {
@@ -124,6 +189,84 @@ export async function ingestInboundEvent(event: InboundEvent): Promise<IngestRes
     messageId: message.id,
     isNewConversation,
   };
+}
+
+/**
+ * Records a message sent from the merchant's own account.
+ *
+ * Two things arrive on this path and they look identical on the wire: our own send
+ * coming back as an echo, and the owner answering in the Instagram app. The only
+ * thing that tells them apart is that ours was written to `messages` with its
+ * provider id before the echo arrived.
+ *
+ * When it is hers, the agent stands down on that thread until the shopper writes
+ * again — otherwise it answers a message she has already answered, in her own
+ * inbox, possibly contradicting her.
+ */
+export async function ingestOutboundEvent(
+  event: InboundEvent
+): Promise<{ merchantId: string; conversationId: string; wasOurs: boolean } | null> {
+  const db = supabaseAdmin();
+
+  if (!event.providerMessageId) return null;
+
+  const merchantId = await merchantForProviderAccount(event.providerAccountId);
+  if (!merchantId) return null;
+
+  // Ours. Nothing to do — it is already in the transcript.
+  const { data: existing } = await db
+    .from('messages')
+    .select('id, conversation_id')
+    .eq('provider_message_id', event.providerMessageId)
+    .maybeSingle();
+
+  if (existing) {
+    return { merchantId, conversationId: existing.conversation_id, wasOurs: true };
+  }
+
+  // Hers. Find the thread it belongs to.
+  const { data: conversation } = await db
+    .from('conversations')
+    .select('id')
+    .eq('merchant_id', merchantId)
+    .eq('provider_conversation_id', event.providerConversationId ?? '')
+    .maybeSingle();
+
+  if (!conversation) {
+    // A thread we have never seen — she is talking to someone the agent has never
+    // met. Nothing to stand down from.
+    return null;
+  }
+
+  await db.from('messages').insert({
+    conversation_id: conversation.id,
+    direction: 'outbound',
+    sender: 'merchant',
+    content: event.text,
+    provider_message_id: event.providerMessageId,
+    status: 'sent',
+  });
+
+  await db
+    .from('conversations')
+    .update({
+      merchant_took_over_at: event.timestamp.toISOString(),
+      last_message_at: event.timestamp.toISOString(),
+    })
+    .eq('id', conversation.id);
+
+  // A draft waiting for approval is now obsolete — she has already answered.
+  await db
+    .from('messages')
+    .update({ status: 'superseded' })
+    .eq('conversation_id', conversation.id)
+    .in('status', ['pending_approval', 'blocked']);
+
+  await logEvent(merchantId, 'conversation.merchant_took_over', {
+    conversationId: conversation.id,
+  });
+
+  return { merchantId, conversationId: conversation.id, wasOurs: false };
 }
 
 async function upsertCustomer(merchantId: string, event: InboundEvent): Promise<string> {

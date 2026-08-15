@@ -24,10 +24,25 @@ export interface PendingReply {
   blockedReason: string | null;
   status: 'pending_approval' | 'blocked';
   createdAt: string;
-  /** What the shopper last said, so she can judge the draft without leaving. */
-  lastCustomerMessage: string | null;
+  /**
+   * The recent thread, so she can judge a draft without opening Instagram.
+   * Read-only, and deliberately not an inbox (§2.8) — she is being asked to approve
+   * something, and approving a reply to a complaint without seeing the complaint is
+   * not a decision she can actually make.
+   */
+  thread: ThreadMessage[];
   source: string;
 }
+
+export interface ThreadMessage {
+  id: string;
+  from: 'customer' | 'agent' | 'merchant';
+  content: string;
+  createdAt: string;
+}
+
+/** Enough to judge a reply; not so much that the card becomes an inbox. */
+const THREAD_LIMIT = 10;
 
 export async function getPendingReplies(merchantId: string, limit = 50): Promise<PendingReply[]> {
   const db = supabaseAdmin();
@@ -46,10 +61,8 @@ export async function getPendingReplies(merchantId: string, limit = 50): Promise
 
   const rows = data ?? [];
 
-  // The shopper's own last message, fetched per conversation so the merchant can
-  // judge a draft without opening Instagram.
   const conversationIds = [...new Set(rows.map((row) => row.conversation_id))];
-  const lastInbound = await getLastInboundMessages(conversationIds);
+  const threads = await getThreads(conversationIds);
 
   return rows.map((row) => {
     const conversation = row.conversations as unknown as {
@@ -68,27 +81,48 @@ export async function getPendingReplies(merchantId: string, limit = 50): Promise
       blockedReason: row.blocked_reason,
       status: row.status as 'pending_approval' | 'blocked',
       createdAt: row.created_at,
-      lastCustomerMessage: lastInbound.get(row.conversation_id) ?? null,
+      thread: threads.get(row.conversation_id) ?? [],
       source: conversation.source,
     };
   });
 }
 
-async function getLastInboundMessages(conversationIds: string[]): Promise<Map<string, string>> {
+/**
+ * The recent exchange per conversation, oldest first.
+ *
+ * Only what the shopper actually saw: drafts awaiting approval, blocked replies and
+ * superseded ones are excluded, because showing her a message the customer never
+ * received would make the thread a lie.
+ */
+async function getThreads(conversationIds: string[]): Promise<Map<string, ThreadMessage[]>> {
   if (!conversationIds.length) return new Map();
 
   const { data } = await supabaseAdmin()
     .from('messages')
-    .select('conversation_id, content, created_at')
+    .select('id, conversation_id, sender, content, created_at, status')
     .in('conversation_id', conversationIds)
-    .eq('direction', 'inbound')
+    .eq('status', 'sent')
     .order('created_at', { ascending: false });
 
-  const latest = new Map<string, string>();
+  const threads = new Map<string, ThreadMessage[]>();
+
   for (const row of data ?? []) {
-    if (!latest.has(row.conversation_id)) latest.set(row.conversation_id, row.content);
+    const existing = threads.get(row.conversation_id) ?? [];
+    if (existing.length >= THREAD_LIMIT) continue;
+
+    existing.push({
+      id: row.id,
+      from: row.sender as ThreadMessage['from'],
+      content: row.content,
+      createdAt: row.created_at,
+    });
+    threads.set(row.conversation_id, existing);
   }
-  return latest;
+
+  // Collected newest-first to respect the limit; read oldest-first.
+  for (const [id, messages] of threads) threads.set(id, messages.reverse());
+
+  return threads;
 }
 
 export type ApprovalResult =

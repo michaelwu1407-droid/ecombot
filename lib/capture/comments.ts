@@ -1,7 +1,7 @@
 import { supabaseAdmin } from '../supabase/admin';
 import { logEvent } from '../log';
 import { canPrivateReplyToComment, type InboundEvent } from '../messaging';
-import { ingestInboundEvent, merchantForProviderAccount } from '../inbound';
+import { agentMayReply, ingestInboundEvent, merchantForProviderAccount } from '../inbound';
 import { classifyCommentIntent } from './intent';
 import { runShopperTurn } from '../agent/run';
 
@@ -97,6 +97,18 @@ export async function handleCommentEvent(event: InboundEvent): Promise<CommentOu
     conversationId: ingested.conversationId,
     decidedBy,
   });
+
+  // Same gate as the DM path: a paused shop, or one that has not gone live, does
+  // not answer comments either.
+  const permission = await agentMayReply(ingested.merchantId, ingested.conversationId);
+  if (!permission.allowed) {
+    await logEvent(merchantId, 'agent.stood_down', {
+      conversationId: ingested.conversationId,
+      reason: permission.reason,
+      source: 'comment',
+    });
+    return { handled: false, reason: 'no_intent' };
+  }
 
   await runShopperTurn({
     merchantId: ingested.merchantId,
