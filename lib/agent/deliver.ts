@@ -1,6 +1,8 @@
 import { supabaseAdmin } from '../supabase/admin';
 import { logEvent } from '../log';
 import { getMessagingProvider, isWithinMessagingWindow, MessagingError } from '../messaging';
+import { runGuardrails } from './guardrails';
+import type { AgentConfig, TurnLedger } from './types';
 
 /**
  * The single exit point for anything the agent says to a customer.
@@ -21,13 +23,51 @@ export interface DeliveryRequest {
   text: string;
   /** Tool calls made this turn, recorded on the message for the audit trail. */
   toolCalls?: unknown;
-  /** Set when a guardrail rejected the reply; forces the queue and records why. */
+  /** Set when the caller already blocked it; forces the queue and records why. */
   blockedReason?: string;
   kind: 'reply' | 'private_reply' | 'revival' | 'restock';
+  /**
+   * What tools established, and the merchant's rules. Required, because the
+   * guardrails run here — see below.
+   */
+  ledger: TurnLedger;
+  config: AgentConfig;
 }
 
 export async function deliverReply(request: DeliveryRequest): Promise<DeliveryOutcome> {
   const db = supabaseAdmin();
+
+  /**
+   * The guardrails run here, at the exit, not only in the caller.
+   *
+   * The shopper loop already runs them — it has to, because the length check
+   * needs a model call to retry. Running them again costs nothing (pure regex)
+   * and buys the property that matters: every future send path — private replies
+   * to comments, restock notices, dead-thread revivals, whatever stage comes
+   * next — is covered by construction rather than by the author remembering.
+   *
+   * A proactive send passes an empty ledger, which means a price in a restock
+   * notice is blocked unless something looked it up. That is the correct answer.
+   */
+  const verdict = runGuardrails({
+    text: request.text,
+    ledger: request.ledger,
+    config: request.config,
+    // The caller owns the one permitted retry; by here the text is final.
+    isRetry: true,
+  });
+
+  const blockedReason =
+    request.blockedReason ?? (verdict.action === 'block' ? verdict.reason : undefined);
+
+  if (verdict.action === 'block' && !request.blockedReason) {
+    await logEvent(request.merchantId, 'guardrail.blocked_at_delivery', {
+      conversationId: request.conversationId,
+      guardrail: verdict.guardrail,
+      reason: verdict.reason,
+      kind: request.kind,
+    });
+  }
 
   const { data: conversation, error } = await db
     .from('conversations')
@@ -54,7 +94,7 @@ export async function deliverReply(request: DeliveryRequest): Promise<DeliveryOu
 
   // Reasons a draft is queued rather than sent, most important first.
   const queueReason = decideQueueReason({
-    blocked: Boolean(request.blockedReason),
+    blocked: Boolean(blockedReason),
     autoSend: config?.auto_send === true,
     lastInboundAt: conversation.last_inbound_at ? new Date(conversation.last_inbound_at) : null,
   });
@@ -62,7 +102,7 @@ export async function deliverReply(request: DeliveryRequest): Promise<DeliveryOu
   if (queueReason) {
     const messageId = await recordMessage(request, {
       status: queueReason === 'blocked' ? 'blocked' : 'pending_approval',
-      blockedReason: request.blockedReason ?? queueReasonText(queueReason),
+      blockedReason: blockedReason ?? queueReasonText(queueReason),
       providerMessageId: null,
     });
 

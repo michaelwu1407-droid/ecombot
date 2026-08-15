@@ -728,3 +728,47 @@ Running in parallel. Here so the full picture is in one document.
 - Onboard pilot merchants on the bridge provider
 - Read every conversation. This is where the skills library gets written.
 - Migrate to Meta direct when approval lands
+
+---
+
+# ADDENDUM — decisions made during the build
+
+Added after the original spec. Same authority as Part 3.
+
+## 3.7 Hermes is a tool, not the runtime
+
+**Decision:** Hermes Agent (Nous Research) is exposed to the **operator agent** as a
+single `research` tool, called over HTTP. It is never in the path of a customer
+conversation and is never exposed to the shopper agent.
+
+**Why:** its ecosystem strength is browser automation, web search and autonomous
+investigation — genuinely better than a bare model call for open-ended external
+questions. But it has no Instagram or commerce tools, it's a Python service while
+this app is TypeScript, its memory store is somewhere our dashboard can't read, and
+~95% of merchant requests are reads and writes against our own Postgres.
+
+This does not reverse §3.1. The loop stays ours; Hermes is one tool inside it.
+
+### New operator agent tool
+
+```
+research(question: string)
+  → delegates to the Hermes service; returns a written answer
+```
+
+Thin HTTP client in `lib/research/index.ts`, posting to a Hermes instance on a small
+VPS via its OpenAI-compatible endpoint.
+
+**Constraints:**
+
+- Only for genuinely external questions — competitor pricing, supplier ranges,
+  market trends, finding creators
+- Anything answerable from `products`, `customers`, `conversations` or
+  `attributed_sales` must use the database tools. Calling `research` for a metrics
+  question is a bug
+- 60 second timeout, then return "couldn't get an answer" rather than hanging
+- Read-only. Returns text. Never writes to our database, never given our credentials
+- If the service is unreachable, this tool alone degrades; everything else keeps
+  working
+
+**Environment variables:** `HERMES_API_URL`, `HERMES_API_KEY`

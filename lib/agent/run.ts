@@ -4,6 +4,8 @@ import { complete, LLMError, type ChatMessage } from './llm';
 import { buildShopperSystemPrompt } from './prompt';
 import { executeTool, SHOPPER_TOOL_DEFINITIONS } from './tools';
 import { deliverReply, type DeliveryOutcome } from './deliver';
+import { runGuardrails, BREVITY_INSTRUCTION } from './guardrails';
+import { extractAndMergeMemory } from './memory';
 import { emptyLedger, type ShopperContext, type ToolContext, type TurnLedger } from './types';
 
 /**
@@ -181,14 +183,59 @@ export async function runShopperTurn(params: {
     };
   }
 
-  // Stage 4 inserts the eight guardrails here, between the draft and delivery.
+  // Nothing reaches a customer without passing through here (§3.3).
+  let verdict = runGuardrails({ text: draft, ledger, config: context.config });
+
+  // Length is the one failure worth a second attempt: the answer was right, it
+  // just went on too long. Everything else is a factual problem a rewrite cannot fix.
+  if (verdict.action === 'retry_shorter') {
+    await logEvent(params.merchantId, 'guardrail.retry_shorter', {
+      conversationId: params.conversationId,
+      reason: verdict.reason,
+      length: draft.length,
+    });
+
+    const shortened = await retryShorter(messages, draft);
+    if (shortened) {
+      draft = shortened;
+      verdict = runGuardrails({ text: draft, ledger, config: context.config, isRetry: true });
+    } else {
+      verdict = { action: 'block', guardrail: 'length', reason: verdict.reason };
+    }
+  }
+
+  // A blocked message is never silently dropped (§4.4): it is logged, escalated,
+  // and queued with the reason so the merchant can see what the agent nearly sent.
+  if (verdict.action === 'block') {
+    await logEvent(params.merchantId, 'guardrail.blocked', {
+      conversationId: params.conversationId,
+      guardrail: verdict.guardrail,
+      reason: verdict.reason,
+      draft,
+    });
+    await escalateForFailure(params, verdict.reason);
+  }
+
   const outcome = await deliverReply({
     merchantId: params.merchantId,
     conversationId: params.conversationId,
     text: draft,
     kind: 'reply',
     toolCalls: summariseLedger(ledger),
+    blockedReason: verdict.action === 'block' ? verdict.reason : undefined,
+    ledger,
+    config: context.config,
   });
+
+  // The escalate tool marks the conversation escalated; anything else that reached
+  // the shopper leaves it active.
+  if (verdict.action === 'pass' && !ledger.escalation && outcome.status === 'sent') {
+    await supabaseAdmin()
+      .from('conversations')
+      .update({ status: 'active', last_message_at: new Date().toISOString() })
+      .eq('id', params.conversationId)
+      .eq('status', 'active');
+  }
 
   const latencyMs = Date.now() - startedAt;
   await logEvent(params.merchantId, 'agent.turn_completed', {
@@ -196,9 +243,42 @@ export async function runShopperTurn(params: {
     iterations,
     latencyMs,
     outcome: outcome.status,
+    guardrail: verdict.action === 'block' ? verdict.guardrail : null,
   });
 
+  // After the reply, never before it — memory must not sit in the five-second path.
+  const lastInbound = [...context.history].reverse().find((m) => m.direction === 'inbound');
+  if (lastInbound) {
+    await extractAndMergeMemory({
+      merchantId: params.merchantId,
+      customerId: params.customerId,
+      customerMessage: lastInbound.content,
+      agentReply: draft,
+    });
+  }
+
   return { outcome, iterations, latencyMs, ledger, draft };
+}
+
+/**
+ * One rewrite attempt at half the length. Tools are withheld: the facts are
+ * already settled, and this pass must not introduce new ones.
+ */
+async function retryShorter(messages: ChatMessage[], draft: string): Promise<string | null> {
+  try {
+    const completion = await complete({
+      messages: [
+        ...messages,
+        { role: 'assistant', content: draft },
+        { role: 'user', content: BREVITY_INSTRUCTION },
+      ],
+      maxTokens: 200,
+      timeoutMs: FINAL_CALL_MS,
+    });
+    return completion.text;
+  } catch {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------

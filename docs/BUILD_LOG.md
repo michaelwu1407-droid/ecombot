@@ -256,6 +256,68 @@ grounded in real stock.
   pinned model. If they do not, the deadline logic degrades gracefully rather than
   failing, but the honest answer needs a measurement.
 
+---
+
+## Stage 4 — Guardrails and memory
+
+**Done when:** an invented price is blocked and escalated; a stated size persists to
+the customer row.
+
+### Shipped
+
+- All eight guardrails as pure functions in `lib/agent/guardrails.ts`, with 43 tests
+  covering each one and their interactions.
+- The blocked path: logged, escalated, and queued with the reason attached, so a
+  blocked message is never silently dropped (§4.4).
+- The one permitted retry — a reply over 500 characters gets a single rewrite at
+  brevity, with tools withheld so the rewrite cannot introduce new facts.
+- Memory extraction on a cheap model call after the reply has gone out, merged into
+  the customer row, never overwriting a known value with null.
+- `stalled` conversation transitions and their hourly cron.
+- `research` client for Hermes (spec addendum §3.7), wired into the operator agent
+  in stage 9.
+- 63 more tests (117 total).
+
+### Decisions
+
+- **Prices allow sums and floor-bounded discounts, nothing else.** Strict equality
+  would block a bundle quote ("both for $75") and any negotiation at all, and §2.2
+  asks for both. Sums are capped at 4 items from 12 looked-up prices — past that the
+  combinations stop being a bundle and start being a way to justify any number.
+- **Bare numbers are not treated as prices.** "a size 10", "2 left", "3-5 days" are
+  all bare numbers, and blocking them would reject almost every legitimate reply.
+  The cost is that "it's 45" passes unchecked; the prompt asks for a currency symbol
+  and quoting a naked number is not a natural way to answer a price question.
+- **A promise is allowed only when the policy was actually read.** If `get_policy`
+  ran this turn, the model had the real text and we accept its paraphrase. If not,
+  the promise came from nowhere — and a delivery date the shop cannot hit is a
+  complaint the merchant inherits.
+- **Hedging is judged by subject.** Unsure about a colour is fine; unsure about a
+  refund is not. The check fires on the combination.
+
+### Review pass — problems found and fixed
+
+- **"Safe for pregnancy" was not caught.** The pattern ended a stem with a word
+  boundary, so `pregnan\b` could never match `pregnancy` — the next character is
+  still a word character. Every stem now consumes its own word. This class of bug is
+  invisible without a test per phrase, which is why there is one.
+- **"Gets to you tomorrow" was not caught.** The delivery pattern required a
+  preposition, so promises phrased without one passed. A promise does not need a
+  preposition to commit the merchant.
+- **Guardrails could be bypassed by a new send path.** They ran in the shopper loop
+  only. Moved into `deliverReply` as well, so private replies to comments, restock
+  notices and revivals — none of which exist yet — are covered by construction
+  rather than by whoever writes them remembering. Running twice costs nothing; they
+  are pure regex.
+
+### Open, for §4.10
+
+- **No guardrail proved impractical to enforce in code.** The two that came closest
+  are price checking (needs the ledger, and needs bundle sums to stay usable) and
+  unfounded promises (regex over natural language, so it will have false positives).
+  Both fail closed: a false positive costs the merchant an approval tap, a false
+  negative costs them a customer.
+
 ### Next
 
-Stage 4 — the eight guardrails, escalation queue, and memory extraction.
+Stage 5 — Stripe Connect, payment links, and sale attribution.
