@@ -2,9 +2,19 @@
 
 @theme {
   --color-ink: oklch(0.21 0.02 260);
-  --color-muted: oklch(0.55 0.015 260);
+  --color-secondary: oklch(0.42 0.015 260);
+  --color-muted: oklch(0.56 0.012 260);
   --color-line: oklch(0.92 0.005 260);
+  --color-surface: oklch(0.985 0.002 260);
   --color-accent: oklch(0.55 0.16 265);
+
+  /* Status palette — fixed, never themed, never reused as a series colour.
+     Warning and serious are sub-3:1 on a light surface by design, so every use
+     pairs an icon or a word with the colour. Status never carries meaning alone. */
+  --color-good: #0ca30c;
+  --color-warning: #fab219;
+  --color-serious: #ec835a;
+  --color-critical: #d03b3b;
 }
 
 html,
@@ -16,4 +26,10 @@ body {
   background: white;
   color: var(--color-ink);
   -webkit-font-smoothing: antialiased;
+}
+
+/* Columns of numbers align; standalone figures do not — tabular figures give
+   every digit the width of a zero, which looks loose at display sizes. */
+.tabular {
+  font-variant-numeric: tabular-nums;
 }

@@ -83,6 +83,15 @@ export async function handleCommentEvent(event: InboundEvent): Promise<CommentOu
     .update({ conversation_id: ingested.conversationId, outcome: 'replied' })
     .eq('comment_id', event.commentId);
 
+  // Stored on the conversation so a draft approved later still goes out through
+  // the private-reply endpoint. An unsolicited DM to someone who only commented
+  // is rejected by Instagram, so this is the only route that works.
+  await supabaseAdmin()
+    .from('conversations')
+    .update({ origin_comment_id: event.commentId, origin_post_id: event.postId })
+    .eq('id', ingested.conversationId)
+    .is('origin_comment_id', null);
+
   await logEvent(merchantId, 'comment.captured', {
     commentId: event.commentId,
     conversationId: ingested.conversationId,

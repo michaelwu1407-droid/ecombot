@@ -463,6 +463,60 @@ gets a follow-up.
 - **`alreadyRevived` was inspecting JSON in the message log.** Replaced with a
   column: the sweep runs four-hourly across every merchant.
 
+---
+
+## Stage 8 — Dashboard
+
+**Done when:** a merchant can see a sale the agent made and trace it to the
+conversation.
+
+### Shipped
+
+- Dashboard: revenue as the hero figure, with response time, conversations,
+  recovered sales and conversion as stat tiles, this week against last.
+- Approvals queue with send, edit, dismiss — the screen that makes suggest mode
+  work.
+- Customers list and profile: size, preferences, notes, waitlist, past
+  conversations.
+- Settings: voice, discount ceiling, escalation rules, policies, auto-send.
+- 18 more tests (194 total) on the metric formatting and deltas.
+
+### Decisions
+
+- **No charts.** The job of this data is "what is the number, and is it better
+  than last week". A figure and a delta do that; a plot would be decoration. One
+  hero figure per view, and it is revenue — §1.4 asks for a dollar figure in week
+  one with no understanding of AI required.
+- **Median response time, not mean.** One thread left for a week would otherwise
+  make a fast week look slow.
+- **Conversion counts only finished conversations.** Counting open threads as
+  losses would make a busy week look like a bad one.
+- **It is called "Approvals", not "Escalations".** In suggest mode almost
+  everything lands there, and calling that queue "escalations" would make a
+  working agent look broken. It is a trust-building surface (§1.6), not a triage
+  list.
+- **Settings that would disable a protection do not exist as fields.** Not
+  disabled — absent. The merchant can configure the agent but cannot turn off the
+  guardrails, the rate limits, or the messaging-window rules (§4.5). The discount
+  ceiling is clamped server-side regardless of what is typed.
+- **An approved reply is attributed to the merchant, not the agent.** She read it
+  and sent it; it is hers. Her edits are logged, because what she changes is the
+  clearest signal we get about how she actually writes.
+
+### Review pass — problems found and fixed
+
+- **Approving a draft on a comment-started conversation would have failed
+  silently.** Instagram rejects an unsolicited DM to someone who has only
+  commented — the private-reply endpoint is the only legal route to open that
+  thread. The approval path was sending a plain DM, which would have lost exactly
+  the leads comment capture exists to win. The comment and post ids are now stored
+  on the conversation, and approval uses the right endpoint, with a clear message
+  if the 7-day window has passed.
+- **The hourly circuit breaker did not apply to approvals.** Meta judges the
+  account's behaviour, not who typed the message.
+- **A nav link pointed at the assistant screen, which does not exist until stage
+  9.** Removed rather than stubbed.
+
 ### Next
 
-Stage 8 — the dashboard: metrics, escalations queue, customers, settings.
+Stage 9 — the operator agent, its boundaries, and the confirmation flow.
