@@ -2,6 +2,7 @@ import { supabaseAdmin } from '../supabase/admin';
 import { logEvent } from '../log';
 import { getMessagingProvider, isWithinMessagingWindow, MessagingError } from '../messaging';
 import { runGuardrails } from './guardrails';
+import { checkReplyLimit } from '../limits';
 import type { AgentConfig, TurnLedger } from './types';
 
 /**
@@ -123,6 +124,20 @@ export async function deliverReply(request: DeliveryRequest): Promise<DeliveryOu
 
   if (!connection?.provider_account_id) {
     return { status: 'failed', error: 'no connected Instagram account for this conversation' };
+  }
+
+  // Last gate before the wire. Enforced here rather than in the callers so a loop
+  // gone wrong cannot flood a merchant's account through some path that forgot to
+  // ask (§1.7). Proactive caps are checked by the jobs, which need to know before
+  // they spend a model call drafting.
+  const replyLimit = await checkReplyLimit(request.merchantId);
+  if (!replyLimit.allowed) {
+    const messageId = await recordMessage(request, {
+      status: 'blocked',
+      blockedReason: 'Paused briefly — the agent hit its hourly sending limit. This is a safety limit on your account.',
+      providerMessageId: null,
+    });
+    return { status: 'queued', messageId, reason: 'blocked' };
   }
   if (!request.comment && !conversation.participant_id) {
     return { status: 'failed', error: 'conversation has no participant to reply to' };

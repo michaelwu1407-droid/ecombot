@@ -411,6 +411,58 @@ enquiry creates a waitlist entry.
 - **The first draft of the claim logic wrote a placeholder merchant id** that would
   have violated the foreign key. Rewritten to resolve the merchant first.
 
+---
+
+## Stage 7 — Proactive
+
+**Done when:** a restocked item notifies its waitlist, and a 24h-stale conversation
+gets a follow-up.
+
+### Shipped
+
+- Restock notification job: waitlisted entries whose product is back, checked
+  against the messaging window and the caps before a word is drafted.
+- Dead thread revival job: one follow-up per conversation, ever.
+- Rate limits and daily caps in code (§1.7), with the reply circuit breaker
+  enforced inside the delivery path so no send path can skip it.
+- `decideRevival` extracted as a pure function, so the rule that decides whether a
+  merchant's account sends an unprompted message is testable without a database.
+- 14 more tests (180 total).
+
+### The limits, and why these numbers
+
+| Limit | Value | Reasoning |
+|---|---|---|
+| Replies per merchant per hour | 120 | A circuit breaker for a loop gone wrong, not a business rule. A boutique with 20+ DMs a day is nowhere near it |
+| Proactive sends per merchant per day | 40 | This is where account standing is actually spent |
+| Proactive sends per customer per week | 1 | Twice in a week is pestering, not selling |
+| Revivals per conversation | 1 | §2.5 says "follow-up", not "follow-ups". A second is nagging |
+
+### Decisions
+
+- **Reactive and proactive are limited differently.** Someone who messaged the shop
+  expects an answer, and the volume is set by the shoppers. Someone who did not
+  message is where the account-restriction risk lives.
+- **Undeliverable notices are never queued.** A restock notice for a shopper whose
+  7-day window has closed would sit in the merchant's approval list and fail the
+  moment they tapped send. Better to retire the waitlist entry than to offer them a
+  button that does not work.
+- **Revival is stamped before the send, not after.** A crash mid-turn must not leave
+  a conversation eligible for a second nudge on the next sweep.
+- **A queued restock notice still marks the entry notified.** The merchant has it
+  either way, and re-queuing the same notice every hour would bury their approvals.
+
+### Review pass — problems found and fixed
+
+- **Revival eligibility was spread across the sweep loop**, mixing database
+  filtering with the actual rule. Extracted to a pure function — this is the code
+  that decides whether a merchant's account messages someone unprompted, and it
+  deserved to be readable and tested on its own.
+- **Restock did not check the messaging window**, so it would draft and queue
+  notices that could never be delivered.
+- **`alreadyRevived` was inspecting JSON in the message log.** Replaced with a
+  column: the sweep runs four-hourly across every merchant.
+
 ### Next
 
-Stage 7 — restock notifications and dead thread revival, with rate limits and caps.
+Stage 8 — the dashboard: metrics, escalations queue, customers, settings.

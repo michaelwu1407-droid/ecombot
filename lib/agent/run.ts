@@ -57,6 +57,12 @@ export async function runShopperTurn(params: {
    * someone who has never messaged the shop.
    */
   comment?: { commentId: string; postId: string };
+  /**
+   * Set when the agent is starting the conversation rather than answering one —
+   * a restock notice or a dead-thread revival. `brief` is what to say; the agent
+   * still has to ground it in tools like any other turn.
+   */
+  proactive?: { kind: 'revival' | 'restock'; brief: string };
 }): Promise<TurnResult> {
   const startedAt = Date.now();
   const ledger = emptyLedger();
@@ -87,6 +93,16 @@ export async function runShopperTurn(params: {
       content: message.content,
     })),
   ];
+
+  // A proactive turn has no incoming message to answer, so the brief takes its
+  // place. It reads as an instruction from the shop owner, not from the shopper —
+  // which is what it is.
+  if (params.proactive) {
+    messages.push({
+      role: 'user',
+      content: `[Note from the shop owner, not from the customer. Do not quote this back to them.]\n${params.proactive.brief}`,
+    });
+  }
 
   let iterations = 0;
   let draft: string | null = null;
@@ -226,7 +242,7 @@ export async function runShopperTurn(params: {
     merchantId: params.merchantId,
     conversationId: params.conversationId,
     text: draft,
-    kind: params.comment ? 'private_reply' : 'reply',
+    kind: params.proactive ? params.proactive.kind : params.comment ? 'private_reply' : 'reply',
     toolCalls: summariseLedger(ledger),
     blockedReason: verdict.action === 'block' ? verdict.reason : undefined,
     ledger,
