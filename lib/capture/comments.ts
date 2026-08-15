@@ -2,7 +2,7 @@ import { supabaseAdmin } from '../supabase/admin';
 import { logEvent } from '../log';
 import { canPrivateReplyToComment, type InboundEvent } from '../messaging';
 import { agentMayReply, ingestInboundEvent, merchantForProviderAccount } from '../inbound';
-import { classifyCommentIntent } from './intent';
+import { classifyComment } from './intent';
 import { runShopperTurn } from '../agent/run';
 
 /**
@@ -63,11 +63,21 @@ export async function handleCommentEvent(event: InboundEvent): Promise<CommentOu
     return { handled: false, reason: 'window_expired' };
   }
 
-  const { intent, decidedBy } = await classifyCommentIntent(event.text);
+  // Every comment is scored and recorded, answered or not. The ones we turn down
+  // are most of the training set's value — see §4.13.
+  const decision = await classifyComment(event.text);
 
-  if (intent !== 'buying') {
+  await supabaseAdmin()
+    .from('comment_events')
+    .update({
+      filter_stage: decision.stage,
+      classifier_confidence: decision.confidence,
+      exploration: decision.exploration,
+    })
+    .eq('comment_id', event.commentId);
+
+  if (decision.intent !== 'buying') {
     await setCommentOutcome(event.commentId, 'skipped_no_intent');
-    await logEvent(merchantId, 'comment.skipped', { commentId: event.commentId, decidedBy });
     return { handled: false, reason: 'no_intent' };
   }
 
@@ -79,8 +89,8 @@ export async function handleCommentEvent(event: InboundEvent): Promise<CommentOu
   }
 
   await supabaseAdmin()
-    .from('comment_replies')
-    .update({ conversation_id: ingested.conversationId, outcome: 'replied' })
+    .from('comment_events')
+    .update({ conversation_id: ingested.conversationId, outcome: 'replied', replied: true })
     .eq('comment_id', event.commentId);
 
   // Stored on the conversation so a draft approved later still goes out through
@@ -95,7 +105,8 @@ export async function handleCommentEvent(event: InboundEvent): Promise<CommentOu
   await logEvent(merchantId, 'comment.captured', {
     commentId: event.commentId,
     conversationId: ingested.conversationId,
-    decidedBy,
+    stage: decision.stage,
+    exploration: decision.exploration,
   });
 
   // Same gate as the DM path: a paused shop, or one that has not gone live, does
@@ -123,10 +134,12 @@ export async function handleCommentEvent(event: InboundEvent): Promise<CommentOu
 
 /** Returns false when another delivery already claimed this comment. */
 async function claimComment(event: InboundEvent, merchantId: string): Promise<boolean> {
-  const { error } = await supabaseAdmin().from('comment_replies').insert({
+  const { error } = await supabaseAdmin().from('comment_events').insert({
     comment_id: event.commentId!,
     merchant_id: merchantId,
     post_id: event.postId,
+    comment_text: event.text,
+    commenter_platform_id: event.senderId,
     outcome: 'pending',
   });
 
@@ -137,5 +150,23 @@ async function claimComment(event: InboundEvent, merchantId: string): Promise<bo
 }
 
 async function setCommentOutcome(commentId: string, outcome: string): Promise<void> {
-  await supabaseAdmin().from('comment_replies').update({ outcome }).eq('comment_id', commentId);
+  await supabaseAdmin().from('comment_events').update({ outcome }).eq('comment_id', commentId);
+}
+
+/**
+ * A claim that was never resolved means the run died between claiming a comment and
+ * answering it. Left alone, that comment is claimed forever and never retried — a
+ * silently lost lead, in the feature the spec calls the biggest leak.
+ */
+export async function releaseStuckComments(olderThanMs = 60 * 60 * 1000): Promise<number> {
+  const cutoff = new Date(Date.now() - olderThanMs).toISOString();
+
+  const { data } = await supabaseAdmin()
+    .from('comment_events')
+    .delete()
+    .eq('outcome', 'pending')
+    .lt('created_at', cutoff)
+    .select('comment_id');
+
+  return data?.length ?? 0;
 }

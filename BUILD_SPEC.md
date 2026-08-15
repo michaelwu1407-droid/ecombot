@@ -772,3 +772,263 @@ VPS via its OpenAI-compatible endpoint.
   working
 
 **Environment variables:** `HERMES_API_URL`, `HERMES_API_KEY`
+
+---
+
+# ADDENDUM — round 2 amendments
+
+Same authority as Part 1 and Part 3. Where these conflict with the original text,
+these win.
+
+## 1.8 Where the differentiator actually is
+
+**Correction to §1.4 and §1.5.** The differentiator is not accuracy and memory. It
+is **hyper-personalised service at a scale the merchant's human team physically
+cannot reach.**
+
+Every one of her 3,000 customers gets treated like her best regular — remembered by
+name, size, taste and history, at 11pm, on a drop night, when 200 people message at
+once. She cannot hire that at any price. Two staff cannot give 3,000 people
+individual attention.
+
+Three features carry this positioning and are the reason a merchant pays 10× the
+market rate for DM tools:
+
+1. Customer memory
+2. Waitlist plus restock
+3. Self-learning
+
+Speed and stock accuracy are necessary but **commoditised** — every incumbent has
+them. They are table stakes, not the pitch.
+
+### New first principle (added to §1.4)
+
+**We sell an outcome, not a subscription.** Never frame or build this as a SaaS
+tool. The comparison is a salesperson's wage, not a monthly plan. Every screen,
+metric and email should reinforce "here is the revenue this generated", never "here
+are the features you have access to".
+
+## 3.8 External data — hard boundary
+
+**Permitted:** aggregate and public benchmarks — category conversion rates, seasonal
+demand curves, competitor pricing from public storefronts, market trends. Used to
+inform thresholds and merchant-facing insights.
+
+**Prohibited, absolutely:** scraping or profiling individual commenters — reading
+their posts, followers, or activity to predict purchase behaviour.
+
+Two reasons, either sufficient on its own:
+
+- The Instagram API only returns data for accounts that authorised our app, so this
+  requires scraping, breaches platform terms, and risks the merchant's account.
+- Building behavioural profiles of private individuals from their personal content
+  is precisely what Australian privacy reform targets.
+
+The merchant's own first-party relationship data is stronger signal regardless.
+Someone who bought twice tells us more than their holiday photos.
+
+**Do not implement any code path that reads a non-authorising user's profile, posts,
+or follower graph.**
+
+## 4.11 Comment capture — three-stage filter
+
+A drop-day post produces 200 comments, of which perhaps 15 are buying intent.
+Running the full agent on all 200 is slow and wasteful.
+
+| Stage | Cost | Does | Removes |
+|---|---|---|---|
+| 1 — rules | free, instant | Discard under 3 characters, emoji-only, pure @-tags, comments on our own replies | ~60% |
+| 2 — pattern | free | High-confidence buying language straight through, no model call | ~25% |
+| 3 — classifier | one cheap call | Only the ambiguous remainder | ~15% |
+
+Cost per 200-comment post: fractions of a cent.
+
+**Tune toward inclusion.** A false positive is a friendly DM to someone browsing. A
+false negative is a lost sale. **Optimise recall, not accuracy.** This reverses the
+earlier implementation, which was precision-biased.
+
+The private reply is the real qualifier — short, low-pressure. The full agent only
+engages once they respond, so expensive reasoning happens after intent is confirmed.
+
+**Rate discipline, in code and never in prompt:** hard daily caps per merchant,
+randomised delays between sends, never identical text twice, and any negative signal
+honoured permanently. A restricted merchant account ends this business by word of
+mouth.
+
+## 4.12 Self-learning loop
+
+This is the moat. It is what makes the service *hers* rather than generic.
+
+```
+Agent drafts → merchant edits before sending
+  → capture (original, her version, context, question type)
+  → after 3 similar corrections, propose a skill
+  → she confirms with one tap
+  → agent behaves differently from then on
+```
+
+**Propose, never auto-apply.** Silent behaviour drift on a live sales channel is
+exactly what she fears. Every behaviour change is approved by her. This is a trust
+feature as much as a safety one.
+
+What she sees is one sentence and two buttons:
+
+> "You've changed how I answer sizing questions 4 times. Should I always mention the
+> fit runs small?"  **Yes / No**
+
+| Signal | Becomes |
+|---|---|
+| Edits a draft | Candidate skill |
+| Rejects a draft outright | Negative example |
+| Answers an escalation herself | New knowledge |
+| Conversation converts | Reinforced pattern |
+| Conversation dies without a sale | Reviewed pattern |
+
+Accepted proposals write a versioned row into `skills`. Rejected proposals suppress
+re-proposal on the same pattern for 30 days.
+
+Month 1 is a generic agent in her voice. Month 6 knows her policies, quirks,
+exceptions and customers. A competitor starts at month 1 and cannot buy month 6.
+
+## 4.13 Comment classifier training data
+
+Build the logging now, the model later. The decision that matters today costs
+nothing and cannot be backfilled.
+
+We hold a complete label chain entirely in our own database:
+
+```
+comment → private reply → DM conversation → payment link → paid
+```
+
+That is real-money ground truth, better than any content heuristic.
+
+**Three problems this must solve:**
+
+1. **Selection bias — the one that will actually bite.** We only learn outcomes for
+   comments we replied to. A model trained on that narrows progressively until it
+   catches only obvious cases. **Fix: reply to 5% of low-confidence comments at
+   random, flagged `exploration = true`. This starts on day one. It cannot be added
+   retroactively, and without it the future training set is permanently biased.
+   This is the single most important line in this section.**
+2. **Volume.** One boutique might produce 15 conversions a week — far too thin for a
+   per-merchant model. Train one pooled model across all merchants with
+   merchant-level features. Fifty merchants gives ~750 labelled examples weekly.
+3. **Asymmetric error cost.** Optimise recall.
+
+Features available, all first-party: comment text and length, post type, time of
+day, whether the commenter has commented before, DM'd before, purchased before, and
+whether they follow.
+
+**Timeline.** Now: logging plus 5% exploration, no model. ~20 merchants: analyse
+which signals predict conversion, adjust thresholds and prompt examples. ~50
+merchants: train a small pooled classifier, expecting a modest improvement over
+pattern matching rather than a transformation.
+
+## 4.14 Zero-friction onboarding
+
+**Replaces the onboarding wizard in §4.7 stage 10.**
+
+**Hard rule: the merchant types nothing during onboarding. Zero free-text fields.**
+Everything is inferred from connected accounts, then confirmed with toggles.
+
+| Source | Extract |
+|---|---|
+| Shopify products | Catalogue, prices, variants, stock, images, descriptions |
+| Shopify policies | Shipping rates, free-shipping thresholds, returns window, delivery times |
+| Last 200 Instagram DM replies | Voice, tone, emoji density, sentence length, sign-offs, how she declines |
+| Last 50 posts and captions | Brand language, product framing |
+| Past Shopify orders | Customer histories, sizes, repeat patterns — seeds the `customers` table |
+
+**Flow:**
+
+1. Connect Instagram (OAuth)
+2. Connect Shopify (OAuth)
+3. 60-second ingestion — show progress, not a spinner
+4. Confirmation screen — 6-8 inferred settings as toggles she corrects
+   ("Free shipping over $150 — right?" ✓ ✗ · "You reply in about 2 hours on
+   average" ✓ · "Your tone: warm, short, emoji-heavy" ✓ ✗)
+5. Voice proof screen — "Here's how you answered 'is this still available?' the last
+   12 times. Here's how I'd answer it now." Thumbs up, or edit
+6. Go live in suggest mode
+
+**Step 5 does double duty** — it configures the agent and it defuses the "I don't
+want a bot" objection in one screen. Do not cut it.
+
+**Filling gaps later, without forms. Three mechanisms only:**
+
+1. **Escalation → knowledge.** Agent hits a real gap → escalates → she answers the
+   customer herself → her answer becomes a candidate skill. The knowledge base
+   builds from actual gaps, not imagined ones.
+2. **The assistant.** "We don't ship to NZ", typed into the operator agent. One
+   sentence.
+3. **Confirmation prompts.** Never a blank field.
+
+## 4.15 Marketing site
+
+Runs in parallel with the product, owned by the founder.
+
+The **ROI calculator** is the highest-leverage asset in this category and it is a
+day's work. Inputs: DMs per day, average order value, current typical response time.
+Output: estimated revenue currently being lost. It lets a merchant convince herself
+before speaking to anyone.
+
+Hero line: **Reply in 30 seconds. Every time. To everyone.**
+
+## 4.16 New tables
+
+```sql
+voice_profile
+  id uuid pk
+  merchant_id uuid fk unique
+  sample_replies jsonb        -- clustered by question type
+  tone_descriptors jsonb      -- emoji density, avg length, formality, greeting/signoff style
+  extracted_at timestamptz
+  confirmed boolean default false
+
+draft_corrections
+  id uuid pk
+  merchant_id uuid fk
+  conversation_id uuid fk
+  question_type text          -- sizing | shipping | price | availability | policy | other
+  agent_draft text
+  merchant_version text
+  context jsonb
+  created_at timestamptz
+
+skill_proposals
+  id uuid pk
+  merchant_id uuid fk
+  proposed_content text
+  evidence_correction_ids uuid[]
+  status text                 -- pending | accepted | rejected
+  created_at timestamptz
+  resolved_at timestamptz
+
+comment_events               -- every comment seen, replied to or not
+  id uuid pk
+  merchant_id uuid fk
+  post_id text
+  comment_id text
+  comment_text text
+  commenter_platform_id text
+  filter_stage int            -- 1 rules | 2 pattern | 3 classifier
+  classifier_confidence float nullable
+  replied boolean
+  exploration boolean default false
+  conversation_id uuid fk nullable
+  converted boolean default false
+  revenue_cents int default 0
+  created_at timestamptz
+```
+
+## 4.17 Build order changes
+
+- **Stage 6** (capture surfaces) now includes the three-stage comment filter and
+  `comment_events` logging with 5% exploration.
+- **New stage between 8 and 9 — self-learning:** `draft_corrections`,
+  `skill_proposals`, the proposal UI. Do not defer this; it is the moat and it needs
+  runtime from day one to accumulate.
+- **Stage 10** (onboarding) is replaced by §4.14. Zero free-text fields is a hard
+  requirement, not a preference.
+- Marketing site and ROI calculator run in parallel, owned by the founder.

@@ -76,7 +76,22 @@ export async function merchantForProviderAccount(providerAccountId: string): Pro
   return data?.merchant_id ?? null;
 }
 
-export type ReplyBlock = 'not_live' | 'paused' | 'escalated' | 'merchant_took_over';
+export type ReplyBlock = 'not_live' | 'paused' | 'escalated' | 'merchant_took_over' | 'opted_out';
+
+/**
+ * A shopper asking to be left alone (§4.11: "permanently honour any negative
+ * signal").
+ *
+ * Deliberately narrow. "Stop it 😂" mid-flirt with a boutique is not an opt-out, and
+ * treating it as one silently loses a customer. What counts is an unambiguous
+ * instruction to stop contacting them.
+ */
+const OPT_OUT =
+  /\b(?:stop (?:messaging|contacting|texting|dm(?:'?ing)?) me|don'?t (?:message|contact|dm) me|unsubscribe|opt me out|leave me alone|remove me from (?:your )?(?:list|waitlist)|take me off (?:your )?list|no more messages)\b/i;
+
+export function isOptOut(text: string): boolean {
+  return OPT_OUT.test(text);
+}
 
 /**
  * Whether the agent is allowed to answer on this conversation right now.
@@ -122,6 +137,16 @@ export async function agentMayReply(
   if (conversation.data?.merchant_took_over_at) {
     return { allowed: false, reason: 'merchant_took_over' };
   }
+
+  const { data: customer } = await db
+    .from('conversations')
+    .select('customers(opted_out_at)')
+    .eq('id', conversationId)
+    .maybeSingle();
+
+  const optedOut = (customer?.customers as unknown as { opted_out_at: string | null } | null)
+    ?.opted_out_at;
+  if (optedOut) return { allowed: false, reason: 'opted_out' };
 
   return { allowed: true };
 }
@@ -175,6 +200,24 @@ export async function ingestInboundEvent(event: InboundEvent): Promise<IngestRes
       merchant_took_over_at: null,
     })
     .eq('id', conversationId);
+
+  // Honoured permanently, and honoured the moment it is said — before the agent
+  // gets a chance to answer.
+  if (isOptOut(event.text)) {
+    await db
+      .from('customers')
+      .update({ opted_out_at: new Date().toISOString() })
+      .eq('id', customerId)
+      .is('opted_out_at', null);
+
+    await db
+      .from('waitlist_entries')
+      .update({ status: 'expired' })
+      .eq('customer_id', customerId)
+      .eq('status', 'waiting');
+
+    await logEvent(merchantId, 'customer.opted_out', { conversationId, customerId });
+  }
 
   await logEvent(merchantId, 'inbound.received', {
     conversationId,

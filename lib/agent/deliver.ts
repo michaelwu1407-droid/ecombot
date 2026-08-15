@@ -2,7 +2,14 @@ import { supabaseAdmin } from '../supabase/admin';
 import { logEvent } from '../log';
 import { getMessagingProvider, isWithinMessagingWindow, MessagingError } from '../messaging';
 import { runGuardrails } from './guardrails';
-import { checkReplyLimit } from '../limits';
+import {
+  checkReplyLimit,
+  checkPrivateReplyLimit,
+  hasOptedOut,
+  isDuplicateText,
+  hashText,
+  humanisedDelayMs,
+} from '../limits';
 import { notifyDraftWaiting } from '../notify';
 import type { AgentConfig, TurnLedger } from './types';
 
@@ -141,6 +148,48 @@ export async function deliverReply(request: DeliveryRequest): Promise<DeliveryOu
     return { status: 'failed', error: 'no connected Instagram account for this conversation' };
   }
 
+  // Someone who asked to be left alone is left alone, permanently — including by
+  // paths that never thought to check (§4.11).
+  if (conversation.customer_id && (await hasOptedOut(conversation.customer_id))) {
+    await logEvent(request.merchantId, 'reply.suppressed_opt_out', {
+      conversationId: request.conversationId,
+    });
+    return { status: 'failed', error: 'this customer asked not to be contacted' };
+  }
+
+  // The comment filter now deliberately answers the ambiguous middle rather than
+  // staying quiet (§4.11). That trade is only safe because the volume is bounded
+  // here: a drop-day post with 200 comments must not become 200 unsolicited DMs.
+  if (request.comment) {
+    const privateReplyLimit = await checkPrivateReplyLimit(request.merchantId);
+    if (!privateReplyLimit.allowed) {
+      const messageId = await recordMessage(request, {
+        status: 'blocked',
+        blockedReason:
+          "Paused for today — the agent has replied to as many comments as is safe for your account. It'll pick up again tomorrow.",
+        providerMessageId: null,
+      });
+      return { status: 'queued', messageId, reason: 'blocked' };
+    }
+  }
+
+  // Identical text repeated across recipients is one of the clearest automation
+  // signals a platform looks for. Checked for anything we started; a direct reply to
+  // a shopper is a conversation, not a broadcast.
+  if (request.comment || request.kind === 'revival' || request.kind === 'restock') {
+    if (await isDuplicateText(request.merchantId, request.text)) {
+      const messageId = await recordMessage(request, {
+        status: 'blocked',
+        blockedReason: 'This is word-for-word something already sent recently — held back so the account does not look automated.',
+        providerMessageId: null,
+      });
+      await logEvent(request.merchantId, 'reply.duplicate_text_blocked', {
+        conversationId: request.conversationId,
+      });
+      return { status: 'queued', messageId, reason: 'blocked' };
+    }
+  }
+
   // Last gate before the wire. Enforced here rather than in the callers so a loop
   // gone wrong cannot flood a merchant's account through some path that forgot to
   // ask (§1.7). Proactive caps are checked by the jobs, which need to know before
@@ -156,6 +205,13 @@ export async function deliverReply(request: DeliveryRequest): Promise<DeliveryOu
   }
   if (!request.comment && !conversation.participant_id) {
     return { status: 'failed', error: 'conversation has no participant to reply to' };
+  }
+
+  // A randomised pause on anything we started, so outbound traffic does not arrive
+  // on a machine's clock. Never applied to a direct reply — a shopper is waiting,
+  // and speed is the thing she is paying for.
+  if (request.comment || request.kind === 'revival' || request.kind === 'restock') {
+    await new Promise((resolve) => setTimeout(resolve, humanisedDelayMs()));
   }
 
   try {
@@ -185,6 +241,7 @@ export async function deliverReply(request: DeliveryRequest): Promise<DeliveryOu
       merchant_id: request.merchantId,
       kind: request.kind,
       customer_id: conversation.customer_id,
+      text_hash: hashText(request.text),
     });
 
     if (result.conversationId) {

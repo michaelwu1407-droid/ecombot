@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { supabaseAdmin } from './supabase/admin';
 import { logEvent } from './log';
 
@@ -30,6 +31,16 @@ export const LIMITS = {
 
   /** One revival attempt per conversation, ever. A second is nagging. */
   revivalsPerConversation: 1,
+
+  /**
+   * Private replies to comments, per merchant, per rolling day.
+   *
+   * This cap exists because the comment filter now optimises recall (§4.11): it
+   * deliberately answers the ambiguous middle rather than staying quiet. That trade
+   * only holds if volume is bounded somewhere else — a drop-day post with 200
+   * comments must not turn into 200 unsolicited DMs from her account.
+   */
+  privateRepliesPerMerchantPerDay: 60,
 } as const;
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -41,6 +52,80 @@ const PROACTIVE_KINDS = ['revival', 'restock', 'operator_batch'];
 export interface LimitDecision {
   allowed: boolean;
   reason?: string;
+}
+
+/**
+ * Randomised pause before a send, so a merchant's outbound traffic does not look
+ * machine-generated (§4.11).
+ *
+ * Only applied to comment replies and proactive sends. A shopper who just messaged
+ * is waiting, and speed is the product — delaying a direct reply to look human would
+ * cost the thing she is paying for.
+ */
+export function humanisedDelayMs(random: () => number = Math.random): number {
+  return Math.round(4_000 + random() * 11_000);
+}
+
+/**
+ * Has this merchant's account already sent these exact words?
+ *
+ * Identical text repeated across recipients is one of the clearest automation
+ * signals a platform can look for. Hashed rather than stored, so the index stays
+ * small and the message text is not duplicated across tables.
+ */
+export async function isDuplicateText(
+  merchantId: string,
+  text: string,
+  withinMs = 7 * DAY_MS
+): Promise<boolean> {
+  const { count, error } = await supabaseAdmin()
+    .from('send_log')
+    .select('id', { count: 'exact', head: true })
+    .eq('merchant_id', merchantId)
+    .eq('text_hash', hashText(text))
+    .gte('created_at', new Date(Date.now() - withinMs).toISOString());
+
+  if (error) throw error;
+  return (count ?? 0) > 0;
+}
+
+export function hashText(text: string): string {
+  // Normalised first, so trivial punctuation changes do not defeat the check.
+  const normalised = text.toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
+  return createHash('sha256').update(normalised).digest('hex').slice(0, 32);
+}
+
+/** A shopper who asked to be left alone is left alone, permanently. */
+export async function hasOptedOut(customerId: string): Promise<boolean> {
+  const { data } = await supabaseAdmin()
+    .from('customers')
+    .select('opted_out_at')
+    .eq('id', customerId)
+    .maybeSingle();
+
+  return Boolean(data?.opted_out_at);
+}
+
+/** Comment replies have their own daily ceiling — see LIMITS. */
+export async function checkPrivateReplyLimit(
+  merchantId: string,
+  now: Date = new Date()
+): Promise<LimitDecision> {
+  const { count, error } = await supabaseAdmin()
+    .from('send_log')
+    .select('id', { count: 'exact', head: true })
+    .eq('merchant_id', merchantId)
+    .eq('kind', 'private_reply')
+    .gte('created_at', new Date(now.getTime() - DAY_MS).toISOString());
+
+  if (error) throw error;
+
+  if ((count ?? 0) >= LIMITS.privateRepliesPerMerchantPerDay) {
+    await logEvent(merchantId, 'limit.private_replies_per_day_hit', { count });
+    return { allowed: false, reason: 'daily comment-reply cap reached' };
+  }
+
+  return { allowed: true };
 }
 
 /** Checked before every proactive send, per merchant and per recipient. */
