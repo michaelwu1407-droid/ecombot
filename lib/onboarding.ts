@@ -128,6 +128,8 @@ export interface OnboardingState {
   stripe: boolean;
   voice: boolean;
   policies: boolean;
+  /** Where to reach her when a draft is waiting. */
+  alerts: boolean;
   live: boolean;
   /** Everything that must be true before going live. */
   readyToGoLive: boolean;
@@ -143,7 +145,7 @@ export async function getOnboardingState(merchantId: string): Promise<Onboarding
       .select('voice_examples, brand_voice, shipping_policy, returns_policy')
       .eq('merchant_id', merchantId)
       .maybeSingle(),
-    db.from('merchants').select('status').eq('id', merchantId).maybeSingle(),
+    db.from('merchants').select('status, notify_participant_id').eq('id', merchantId).maybeSingle(),
     db.from('products').select('id', { count: 'exact', head: true }).eq('merchant_id', merchantId),
   ]);
 
@@ -158,23 +160,37 @@ export async function getOnboardingState(merchantId: string): Promise<Onboarding
   const voice = voiceExamples.length > 0 || Boolean(config.data?.brand_voice);
   const policies = Boolean(config.data?.shipping_policy || config.data?.returns_policy);
 
+  const alerts = Boolean(merchant.data?.notify_participant_id);
+
   return {
     instagram,
     shopify,
     stripe: kinds.has('stripe'),
     voice,
     policies,
+    alerts,
     live: merchant.data?.status === 'active',
     // Stripe is not required to go live: an agent that answers questions well
     // without taking payment is still worth having, and §4.9 is reached in stages.
-    readyToGoLive: instagram && shopify && voice,
+    //
+    // Alerts *are* required. In suggest mode every reply waits for her, so going
+    // live without somewhere to be told means shoppers wait hours — slower than
+    // she was before, which is the opposite of what she bought.
+    readyToGoLive: instagram && shopify && voice && alerts,
   };
 }
 
 export async function goLive(merchantId: string): Promise<{ ok: boolean; error?: string }> {
   const state = await getOnboardingState(merchantId);
   if (!state.readyToGoLive) {
-    return { ok: false, error: 'Connect Instagram and Shopify, and set the voice, first.' };
+    const missing = [
+      !state.instagram && 'connect Instagram',
+      !state.shopify && 'connect Shopify',
+      !state.voice && 'teach it your voice',
+      !state.alerts && 'tell us where to send your alerts',
+    ].filter(Boolean);
+
+    return { ok: false, error: `Nearly — you still need to ${missing.join(', ')}.` };
   }
 
   await supabaseAdmin().from('merchants').update({ status: 'active' }).eq('id', merchantId);

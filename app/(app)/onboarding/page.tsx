@@ -82,6 +82,25 @@ export default async function OnboardingPage({
     redirect('/onboarding?done=' + encodeURIComponent(`Saved ${examples.length} examples.`));
   }
 
+  async function saveAlerts(formData: FormData) {
+    'use server';
+    const active = await currentMerchant();
+    if (!active) redirect('/login');
+
+    const handle = String(formData.get('notify_participant_id') ?? '').trim();
+    if (!handle) {
+      redirect('/onboarding?error=' + encodeURIComponent('Enter a WhatsApp number or Instagram handle.'));
+    }
+
+    await supabaseAdmin()
+      .from('merchants')
+      .update({ notify_participant_id: handle })
+      .eq('id', active.id);
+
+    revalidatePath('/onboarding');
+    redirect('/onboarding?done=' + encodeURIComponent("We'll message you there when a reply needs you."));
+  }
+
   async function activate() {
     'use server';
     const active = await currentMerchant();
@@ -108,7 +127,7 @@ export default async function OnboardingPage({
     <main className="mx-auto max-w-2xl px-6 py-10">
       <h1 className="text-xl font-semibold tracking-tight">Getting set up</h1>
       <p className="mt-1 text-sm text-muted">
-        Five things, then your agent is live. Nothing sends to a customer until you say so.
+        Six things, then your agent is live. Nothing sends to a customer until you say so.
       </p>
 
       {params.done && (
@@ -188,7 +207,32 @@ export default async function OnboardingPage({
           </form>
         </Step>
 
-        <Step n={4} title="Set your rules" done={state.policies}>
+        <Step n={4} title="Where should we reach you?" done={state.alerts}>
+          <p className="text-sm text-muted">
+            Every reply waits for your approval to start with. We message you the moment one
+            is ready, so a shopper is never left waiting — this is the part that keeps you
+            fast.
+          </p>
+
+          <form action={saveAlerts} className="mt-3 flex gap-2">
+            <input
+              name="notify_participant_id"
+              required
+              placeholder="WhatsApp number or Instagram handle"
+              className="flex-1 rounded-md border border-line px-3 py-2 text-sm outline-none focus:border-accent"
+            />
+            <button className="rounded-md bg-ink px-4 py-2 text-sm font-medium text-white">
+              Save
+            </button>
+          </form>
+
+          <p className="mt-2 text-xs text-muted">
+            Message us first from that number so WhatsApp lets us reply — your account
+            manager will tell you where.
+          </p>
+        </Step>
+
+        <Step n={5} title="Set your rules" done={state.policies}>
           <p className="text-sm text-muted">
             Shipping, returns, and how much the agent may ever discount. If a policy is blank it
             fetches you rather than inventing one.
@@ -198,7 +242,7 @@ export default async function OnboardingPage({
           </Link>
         </Step>
 
-        <Step n={5} title="Take payments" done={state.stripe} optional>
+        <Step n={6} title="Take payments" done={state.stripe} optional>
           <p className="text-sm text-muted">
             Lets the agent send a payment link in the conversation. Money goes straight to your own
             Stripe account. You can add this later.
@@ -234,7 +278,7 @@ export default async function OnboardingPage({
             <p className="mt-1 text-sm text-muted">
               {state.readyToGoLive
                 ? 'It will start drafting replies to new messages. Every one waits for your approval.'
-                : 'Connect Instagram and Shopify, and teach it your voice, first.'}
+                : 'Finish the steps above first.'}
             </p>
             <form action={activate} className="mt-4">
               <button

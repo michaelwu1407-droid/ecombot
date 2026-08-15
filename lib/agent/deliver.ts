@@ -3,6 +3,7 @@ import { logEvent } from '../log';
 import { getMessagingProvider, isWithinMessagingWindow, MessagingError } from '../messaging';
 import { runGuardrails } from './guardrails';
 import { checkReplyLimit } from '../limits';
+import { notifyDraftWaiting } from '../notify';
 import type { AgentConfig, TurnLedger } from './types';
 
 /**
@@ -128,6 +129,10 @@ export async function deliverReply(request: DeliveryRequest): Promise<DeliveryOu
       conversationId: request.conversationId,
       reason: queueReason,
     });
+
+    // A draft nobody knows about is a shopper waiting. Batched, and never allowed
+    // to fail the turn that produced it.
+    await notifyDraftWaiting(request.merchantId);
 
     return { status: 'queued', messageId, reason: queueReason };
   }
