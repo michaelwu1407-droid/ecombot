@@ -14,8 +14,7 @@ import { supabaseAdmin } from '@/lib/supabase/admin';
 const NAV = [
   { href: '/dashboard', label: 'Dashboard' },
   { href: '/escalations', label: 'Approvals' },
-  // Assistant lands in stage 9. Not linked until it exists — a nav item that
-  // 404s is worse than one that is not there yet.
+  { href: '/assistant', label: 'Assistant' },
   { href: '/customers', label: 'Customers' },
   { href: '/settings', label: 'Settings' },
 ] as const;

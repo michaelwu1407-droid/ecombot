@@ -517,6 +517,56 @@ conversation.
 - **A nav link pointed at the assistant screen, which does not exist until stage
   9.** Removed rather than stubbed.
 
+---
+
+## Stage 9 — Operator agent
+
+**Done when:** "never discount below 10%" updates the config after confirmation,
+and the shopper agent enforces it on the next conversation.
+
+### Shipped
+
+- The operator loop: same loop as the shopper agent, different toolset, different
+  boundaries (§2.1). Eight iterations, 30-second budget.
+- Seven tools plus `research` — which is only offered when the Hermes service is
+  actually configured.
+- `operator_tasks` confirmation flow: propose, show what was understood, confirm,
+  execute.
+- The Assistant screen, with pending proposals as cards above the conversation.
+- 12 more tests (206 total) on the boundary rules.
+
+### Decisions
+
+- **The forbidden actions are absent, not refused.** There is no tool to disable a
+  guardrail, change a rate limit, or delete data. Not a disabled tool, not a tool
+  that says no — the capability does not exist, so no amount of rephrasing reaches
+  it. The prompt explains *why* so the merchant gets a reason rather than a wall.
+- **Execution re-validates everything.** The task row is re-read at confirm time and
+  the field allowlist, the discount ceiling, the messaging window and the caps are
+  all checked again. A ceiling that only existed when the proposal was written
+  would not be a ceiling.
+- **`operator_tasks` is the chat history.** §2.6 says the operator agent needs no
+  memory or state store of its own, and it does not — the audit trail and the
+  transcript are the same rows.
+- **A batch send is filtered at proposal, not at send.** Showing "12 people" and
+  then sending to four is worse than showing four. The merchant confirms a number,
+  so that number has to be true.
+- **A batch draft is guardrail-checked with an empty ledger.** Nothing looked
+  anything up, so any price the merchant typed into a batch is treated as
+  unfounded. That is the right answer — a figure typed into a broadcast is not a
+  figure anything verified.
+- **Corrections are `write_skill`.** §2.6 lists "correction" as its own category,
+  but the mechanism is identical to a standing rule: a versioned skills row. Kept
+  as one tool rather than two that do the same thing.
+
+### Review pass — problems found and fixed
+
+- **A proposal could promise more recipients than it would reach.** The messaging
+  window was only checked at execution.
+- **The assistant input was unbounded**, which is a way to spend tokens.
+- **`operator_batch` was not an accepted delivery kind**, so a confirmed batch
+  would have failed at the type boundary.
+
 ### Next
 
-Stage 9 — the operator agent, its boundaries, and the confirmation flow.
+Stage 10 — onboarding wizard, Sentry, webhook rate limiting, founder admin views.

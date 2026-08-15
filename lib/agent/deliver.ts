@@ -26,7 +26,7 @@ export interface DeliveryRequest {
   toolCalls?: unknown;
   /** Set when the caller already blocked it; forces the queue and records why. */
   blockedReason?: string;
-  kind: 'reply' | 'private_reply' | 'revival' | 'restock';
+  kind: 'reply' | 'private_reply' | 'revival' | 'restock' | 'operator_batch';
   /**
    * What tools established, and the merchant's rules. Required, because the
    * guardrails run here — see below.

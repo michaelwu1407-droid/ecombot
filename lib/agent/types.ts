@@ -119,6 +119,12 @@ export interface ToolContext {
   customerId: string;
   config: AgentConfig;
   ledger: TurnLedger;
+  /**
+   * Operator agent only: the merchant's own words for this turn, recorded on any
+   * operator_task the tools create so the confirmation screen shows what was asked
+   * alongside what was understood.
+   */
+  request?: string;
 }
 
 export type ToolHandler = (
