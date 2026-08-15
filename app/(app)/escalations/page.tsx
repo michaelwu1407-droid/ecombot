@@ -3,6 +3,13 @@ import { redirect } from 'next/navigation';
 import Link from 'next/link';
 import { currentMerchant } from '@/lib/supabase/server';
 import { getPendingReplies, approveReply, dismissReply, type PendingReply } from '@/lib/escalations';
+import {
+  getPendingProposals,
+  acceptProposal,
+  rejectProposal,
+  proposalQuestion,
+  type PendingProposal,
+} from '@/lib/learning';
 
 /**
  * Approvals (BUILD_SPEC §2.8 screen 2).
@@ -21,7 +28,10 @@ export default async function EscalationsPage({
   const merchant = await currentMerchant();
   if (!merchant) redirect('/login');
 
-  const pending = await getPendingReplies(merchant.id);
+  const [pending, proposals] = await Promise.all([
+    getPendingReplies(merchant.id),
+    getPendingProposals(merchant.id),
+  ]);
 
   async function approve(formData: FormData) {
     'use server';
@@ -47,6 +57,24 @@ export default async function EscalationsPage({
     revalidatePath('/escalations');
   }
 
+  async function acceptRule(formData: FormData) {
+    'use server';
+    const active = await currentMerchant();
+    if (!active) redirect('/login');
+
+    await acceptProposal(active.id, String(formData.get('proposal_id')));
+    revalidatePath('/escalations');
+  }
+
+  async function rejectRule(formData: FormData) {
+    'use server';
+    const active = await currentMerchant();
+    if (!active) redirect('/login');
+
+    await rejectProposal(active.id, String(formData.get('proposal_id')));
+    revalidatePath('/escalations');
+  }
+
   const needsAttention = pending.filter((reply) => reply.status === 'blocked');
   const drafts = pending.filter((reply) => reply.status === 'pending_approval');
 
@@ -63,6 +91,24 @@ export default async function EscalationsPage({
         <p className="mt-6 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
           {params.error}
         </p>
+      )}
+
+      {/*
+        The learning loop's entire interface: one sentence, two buttons (§4.12).
+        Placed above the queue because it is the thing that makes tomorrow's drafts
+        better, and she is already here.
+      */}
+      {proposals.length > 0 && (
+        <section className="mt-8 flex flex-col gap-3">
+          {proposals.map((proposal) => (
+            <ProposalCard
+              key={proposal.id}
+              proposal={proposal}
+              accept={acceptRule}
+              reject={rejectRule}
+            />
+          ))}
+        </section>
       )}
 
       {pending.length === 0 && (
@@ -96,6 +142,37 @@ export default async function EscalationsPage({
         </section>
       )}
     </main>
+  );
+}
+
+function ProposalCard({
+  proposal,
+  accept,
+  reject,
+}: {
+  proposal: PendingProposal;
+  accept: (formData: FormData) => Promise<void>;
+  reject: (formData: FormData) => Promise<void>;
+}) {
+  return (
+    <article className="rounded-lg border border-line bg-surface px-4 py-3">
+      <p className="text-sm">{proposalQuestion(proposal)}</p>
+      <form className="mt-3 flex items-center gap-2">
+        <input type="hidden" name="proposal_id" value={proposal.id} />
+        <button
+          formAction={accept}
+          className="rounded-md bg-ink px-4 py-1.5 text-sm font-medium text-white"
+        >
+          Yes
+        </button>
+        <button
+          formAction={reject}
+          className="rounded-md border border-line px-4 py-1.5 text-sm font-medium text-secondary"
+        >
+          No
+        </button>
+      </form>
+    </article>
   );
 }
 

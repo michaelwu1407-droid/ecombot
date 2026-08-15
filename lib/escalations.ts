@@ -2,6 +2,7 @@ import { supabaseAdmin } from './supabase/admin';
 import { logEvent } from './log';
 import { getMessagingProvider, canPrivateReplyToComment } from './messaging';
 import { checkReplyLimit } from './limits';
+import { captureCorrection } from './learning';
 
 /**
  * The escalations queue (BUILD_SPEC §2.8 screen 2).
@@ -239,9 +240,19 @@ export async function approveReply(params: {
     await logEvent(params.merchantId, 'reply.approved', {
       conversationId: message.conversation_id,
       edited: wasEdited,
-      // The edit itself is the signal — what she changed is how she writes.
-      ...(wasEdited ? { original: message.content, sent: text } : {}),
     });
+
+    // What she changed is the highest-signal thing we ever see about how she works
+    // (§4.12). Three corrections of one kind become a proposed rule.
+    if (wasEdited) {
+      await captureCorrection({
+        merchantId: params.merchantId,
+        conversationId: message.conversation_id,
+        agentDraft: message.content,
+        merchantVersion: text,
+        customerMessage: await lastCustomerMessage(message.conversation_id),
+      });
+    }
 
     return { ok: true, sent: true };
   } catch (error) {
@@ -254,21 +265,55 @@ export async function approveReply(params: {
   }
 }
 
-export async function dismissReply(merchantId: string, messageId: string): Promise<void> {
+export async function dismissReply(
+  merchantId: string,
+  messageId: string,
+  reason?: 'handled_myself' | 'not_worth_replying'
+): Promise<void> {
   const db = supabaseAdmin();
 
   const { data: message } = await db
     .from('messages')
-    .select('id, conversation_id, conversations!inner(merchant_id)')
+    .select('id, conversation_id, content, conversations!inner(merchant_id)')
     .eq('id', messageId)
     .eq('conversations.merchant_id', merchantId)
     .maybeSingle();
 
   if (!message) return;
 
-  await db.from('messages').update({ status: 'dismissed' }).eq('id', messageId);
+  await db
+    .from('messages')
+    .update({ status: 'dismissed', dismiss_reason: reason ?? null })
+    .eq('id', messageId);
 
-  await logEvent(merchantId, 'reply.dismissed', { conversationId: message.conversation_id });
+  // A rejection is a negative example (§4.12) — worth learning from, but never
+  // something to build a standing rule out of on its own.
+  await captureCorrection({
+    merchantId,
+    conversationId: message.conversation_id,
+    agentDraft: message.content,
+    merchantVersion: null,
+    customerMessage: await lastCustomerMessage(message.conversation_id),
+  });
+
+  await logEvent(merchantId, 'reply.dismissed', {
+    conversationId: message.conversation_id,
+    reason: reason ?? null,
+  });
+}
+
+/** What the shopper last said — the context a correction is only meaningful against. */
+async function lastCustomerMessage(conversationId: string): Promise<string | null> {
+  const { data } = await supabaseAdmin()
+    .from('messages')
+    .select('content')
+    .eq('conversation_id', conversationId)
+    .eq('direction', 'inbound')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  return data?.content ?? null;
 }
 
 /** Has anything already reached this shopper on this thread? */
