@@ -163,6 +163,8 @@ export async function recordPaidCheckout(params: {
   sessionId: string;
   amountCents: number;
   merchantId: string;
+  /** From Stripe. The one certain link between an Instagram shopper and Shopify. */
+  customerEmail?: string | null;
 }): Promise<{ attributed: boolean; reason?: string }> {
   const db = supabaseAdmin();
 
@@ -209,6 +211,13 @@ export async function recordPaidCheckout(params: {
       .from('conversations')
       .update({ outcome: 'sale', status: 'closed' })
       .eq('id', conversation.id);
+
+    // A paid checkout is the moment we learn their email, which is the certain
+    // join to everything Shopify already knew about them (§4.14 identity tiers).
+    if (conversation.customer_id && params.customerEmail) {
+      const { joinOnEmail } = await import('../identity');
+      await joinOnEmail(link.merchant_id, conversation.customer_id, params.customerEmail);
+    }
 
     // Lifetime value is what makes a returning shopper feel known (§2.4).
     if (conversation.customer_id) {

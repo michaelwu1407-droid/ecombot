@@ -60,6 +60,7 @@ export async function POST(req: Request): Promise<Response> {
           sessionId: session.id,
           amountCents: session.amount_total ?? 0,
           merchantId,
+          customerEmail: session.customer_details?.email ?? null,
         });
 
         return Response.json({ ok: true, ...result });

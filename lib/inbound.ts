@@ -166,6 +166,18 @@ export async function ingestInboundEvent(event: InboundEvent): Promise<IngestRes
   }
 
   const customerId = await upsertCustomer(merchantId, event);
+
+  // Tier 1: she may have written this shopper's handle onto a Shopify order months
+  // ago, in which case their whole purchase history attaches right now.
+  if (event.senderHandle) {
+    try {
+      const { joinNewShopperByHandle } = await import('./shopify/customers');
+      await joinNewShopperByHandle({ merchantId, customerId, handle: event.senderHandle });
+    } catch (error) {
+      console.error('[identity] handle join failed', error);
+    }
+  }
+
   const { conversationId, isNewConversation } = await resolveConversation(
     merchantId,
     customerId,
